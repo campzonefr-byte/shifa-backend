@@ -3,7 +3,14 @@ import json
 from dotenv import load_dotenv
 from openai import OpenAI
 from datetime import date
-from ai_module.product_db import get_quantity_offers_dict, get_bundle_offers
+from ai_module.dashboard import build_product_loyalty_message
+
+from ai_module.product_db import (
+    get_product_knowledge_dict,
+    get_quantity_offers_dict,
+    get_bundle_offers,
+    
+)  
 from ai_module.user_memory_db import (
     get_user_memory,
     get_user_profile,
@@ -16,6 +23,307 @@ load_dotenv()
 api_key = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=api_key) if api_key else None
 
+LANGUAGE_NAMES = {
+    "ar": "Arabic",
+    "fr": "French",
+    "en": "English",
+}
+PRODUCT_SIGNAL_ALIASES = {
+    "Colon Detox": {
+        "digestion",
+        "bloating_gas",
+        "bloating",
+        "gas",
+        "digestive health",
+        "colon",
+        "gut",
+        "constipation",
+    },
+
+    "Psyllium": {
+        "constipation",
+        "fiber_support",
+        "fiber",
+        "fibre" ,
+        "bowel movement",
+        "bowel regularity",
+        "satiety",
+        "appetite_control",
+        "weight_loss",
+        "weight management",
+    },
+
+    "Liver Detox": {
+        "detox",
+        "liver",
+        "liver support",
+    },
+
+    "Slim Pack": {
+        "weight_loss",
+        "weight management",
+        "slimming",
+        "appetite",
+        "metabolism",
+    },
+
+    "Blood Detox": {
+        "blood_regulation",
+        "heart_support",
+        "circulation",
+        "heart",
+    },
+
+    "Lung Detox": {
+        "respiratory_support",
+        "smoking_reduction_support",
+        "lungs",
+        "lung support",
+        "breathing",
+        "smoking",
+        "respiratory",
+    },
+
+    "Berberine & Ceylon Cinnamon": {
+        "glycemic_balance",
+        "insulin_sensitivity",
+        "sugar_cravings",
+        "blood sugar",
+        "glucose",
+        "insulin",
+   
+    },
+}
+
+def normalize_language(language: str | None) -> str:
+    language = str(language or "ar").lower().strip()
+    return language if language in LANGUAGE_NAMES else "ar"
+
+
+def translated_text(language: str, key: str) -> str:
+    language = normalize_language(language)
+
+    texts = {
+        "ar": {
+            "supplement_warning": (
+                "منتجات شفاء مكملات غذائية وليست أدوية، ولا تعوّض استشارة الطبيب."
+            ),
+            "persistent_symptoms_warning": (
+                "إذا كانت الأعراض متكررة أو قوية، من الأفضل استشارة مختص."
+            ),
+            "chronic_condition_warning": (
+                "إذا كان لديك مرض مزمن أو تستعمل أدوية، استشر طبيباً أو صيدلياً "
+                "قبل استعمال أي مكمل غذائي."
+            ),
+            "pregnancy_warning": (
+                "خلال فترة الحمل أو الرضاعة، استشيري الطبيب قبل استعمال أي مكمل غذائي."
+            ),
+            "best_offer": "هذا أفضل عرض متوفر حالياً لهذا المنتج.",
+            "small_habits_action": "ابدأ بعادات صغيرة وسهلة التطبيق.",
+            "small_habits_reason": (
+                "التغييرات التدريجية تساعدك على تحسين الاستمرارية على المدى الطويل."
+            ),
+            "movement_action": "زد مستوى الحركة تدريجياً.",
+            "movement_reason": (
+                "البدء تدريجياً يساعدك على تحسين نشاطك بطريقة واقعية وآمنة."
+            ),
+            "stress_action": "حاول تحسين النوم والتقليل من التوتر.",
+            "stress_reason": (
+                "إدارة التوتر والنوم الجيد يدعمان التعافي والصحة العامة."
+            ),
+            "colon_reason": (
+                "تم اختياره لدعم الهضم والتخفيف من النفخة والغازات والإمساك."
+            ),
+            "liver_reason": (
+                "تم اختياره لدعم وظائف الكبد وروتين التخلص الطبيعي من السموم."
+            ),
+            "slim_reason": (
+                "تم اختياره ليتناسب مع هدف التحكم في الوزن."
+            ),
+            "blood_reason": (
+                "تم اختياره لدعم الدورة الدموية وصحة القلب والراحة العامة."
+            ),
+            "fallback_reasoning": (
+                "حضّرت لك هذه الخطة حسب هدفك وملفك وعاداتك الأخيرة "
+                "حتى تساعدك على التقدم بطريقة صحية وتدريجية."
+            ),
+            "lung_reason": (
+                "اخترنا هذا المنتج لدعم صحة الرئتين والراحة أثناء التنفس، "
+                "خصوصاً ضمن خطة تدريجية للتقليل من التدخين."
+            ),
+            "berberine_reason": (
+                "اخترنا هذا المنتج لدعم التوازن الطبيعي للسكر، "
+                "وحساسية الإنسولين والتحكم في الرغبة في السكريات."
+            ),
+            "psyllium_reason": (
+                "اخترنا هذا المنتج لدعم الهضم، وانتظام حركة الأمعاء، "
+                "وزيادة الشعور بالشبع."
+            ),
+
+            "diabetes_warning": (
+                "إذا كنت مصابًا بالسكري أو تستعمل أدوية لتنظيم السكر، "
+                "استشر طبيبك قبل استعمال هذا المكمل. "
+                    "هذا المنتج لا يُعتبر بديلاً عن العلاج الطبي."
+                ),
+
+            "hypertension_warning": (
+                "إذا كنت تعاني من ارتفاع ضغط الدم أو تستعمل أدوية للضغط، "
+                "استشر طبيبك قبل استعمال هذا المكمل. "
+                "هذا المنتج لا يُعتبر بديلاً عن العلاج الطبي."
+            ),
+        },
+
+        "fr": {
+            "supplement_warning": (
+                "Les produits Shifa sont des compléments alimentaires et ne remplacent "
+                "pas un avis médical."
+            ),
+            "persistent_symptoms_warning": (
+                "Si les symptômes sont fréquents ou importants, il est préférable "
+                "de consulter un professionnel de santé."
+            ),
+            "chronic_condition_warning": (
+                "Si vous souffrez d’une maladie chronique ou prenez des médicaments, "
+                "consultez un médecin ou un pharmacien avant d’utiliser un complément."
+            ),
+            "pregnancy_warning": (
+                "Pendant la grossesse ou l’allaitement, consultez votre médecin "
+                "avant d’utiliser un complément alimentaire."
+            ),
+            "best_offer": "Voici la meilleure offre actuellement disponible pour ce produit.",
+            "small_habits_action": "Commencez par de petites habitudes faciles à maintenir.",
+            "small_habits_reason": (
+                "Des changements progressifs favorisent une meilleure régularité "
+                "sur le long terme."
+            ),
+            "movement_action": "Augmentez progressivement votre niveau d’activité.",
+            "movement_reason": (
+                "Une progression graduelle permet d’améliorer votre activité "
+                "de manière réaliste et sûre."
+            ),
+            "stress_action": "Améliorez votre sommeil et réduisez votre stress.",
+            "stress_reason": (
+                "Une meilleure gestion du stress favorise la récupération "
+                "et le bien-être général."
+            ),
+            "colon_reason": (
+                "Sélectionné pour soutenir la digestion et aider en cas de ballonnements, "
+                "gaz ou constipation."
+            ),
+            "liver_reason": (
+                "Sélectionné pour soutenir le fonctionnement du foie "
+                "et la détoxification naturelle."
+            ),
+            "slim_reason": (
+                "Sélectionné pour accompagner votre objectif de gestion du poids."
+            ),
+            "blood_reason": (
+                "Sélectionné pour soutenir la circulation sanguine, le cœur "
+                "et le bien-être général."
+            ),
+            "fallback_reasoning": (
+                "J’ai préparé ce plan selon votre objectif, votre profil et vos habitudes "
+                "récentes afin de vous aider à progresser sainement."
+            ),
+            "lung_reason": (
+                "Sélectionné pour soutenir le confort respiratoire et la santé des poumons, "
+                "notamment lors d’une réduction progressive du tabac."
+            ),
+            "berberine_reason": (
+                "Sélectionné pour soutenir l’équilibre glycémique normal, "
+                "la sensibilité à l’insuline et le contrôle des envies de sucre."
+            ),
+            "psyllium_reason": (
+                "Sélectionné pour soutenir le transit intestinal, "
+                "le confort digestif et la satiété."
+            ),
+
+            "diabetes_warning": (
+                "Si vous êtes diabétique ou sous traitement pour le diabète, "
+                "consultez un professionnel de santé avant utilisation. "
+                "Ce complément ne remplace pas votre traitement médical."
+            ),
+
+            "hypertension_warning": (
+                "Si vous souffrez d'hypertension ou prenez un traitement antihypertenseur, "
+                "consultez un professionnel de santé avant utilisation. "
+                "Ce complément ne remplace pas votre traitement médical."
+            ),
+        },
+
+        "en": {
+            "supplement_warning": (
+                "Shifa products are dietary supplements and do not replace medical advice."
+            ),
+            "persistent_symptoms_warning": (
+                "If symptoms are frequent or severe, consult a healthcare professional."
+            ),
+            "chronic_condition_warning": (
+                "If you have a chronic condition or take medication, consult a doctor "
+                "or pharmacist before using any supplement."
+            ),
+            "pregnancy_warning": (
+                "During pregnancy or breastfeeding, consult your doctor before using "
+                "any dietary supplement."
+            ),
+            "best_offer": "This is the best currently available offer for this product.",
+            "small_habits_action": "Start with small, achievable habits.",
+            "small_habits_reason": (
+                "Gradual changes improve long-term consistency."
+            ),
+            "movement_action": "Increase your movement progressively.",
+            "movement_reason": (
+                "A gradual approach helps improve activity safely and realistically."
+            ),
+            "stress_action": "Improve your sleep and reduce stress.",
+            "stress_reason": (
+                "Stress management and quality sleep support recovery and wellbeing."
+            ),
+            "colon_reason": (
+                "Selected to support digestion and help with bloating, gas, "
+                "and constipation."
+            ),
+            "liver_reason": (
+                "Selected to support liver function and the body’s natural detox routine."
+            ),
+            "slim_reason": (
+                "Selected to support your weight-management goal."
+            ),
+            "blood_reason": (
+                "Selected to support circulation, heart health, and general wellbeing."
+            ),
+            "fallback_reasoning": (
+                "I prepared this plan using your goal, profile, and recent habits "
+                "to help you progress in a healthy and gradual way."
+            ),
+            "lung_reason": (
+                "Selected to support lung wellness and comfortable breathing, "
+                "including during gradual smoking reduction."
+            ),
+            "berberine_reason": (
+                "Selected to support normal glucose balance, insulin sensitivity, "
+                "and management of sugar cravings."
+            ),
+            "psyllium_reason": (
+                "Selected to support digestion, bowel regularity, fiber intake, "
+                "and satiety."
+            ),
+
+            "diabetes_warning": (
+                "If you have diabetes or take medication for blood sugar control, "
+                "consult your healthcare professional before use. "
+                "This supplement does not replace medical treatment."
+            ),
+
+            "hypertension_warning": (
+                "If you have high blood pressure or take medication for hypertension, "
+                "consult your healthcare professional before use. "
+                "This supplement does not replace medical treatment."
+    ),
+        },
+    }
+
+    return texts[language].get(key, "")
 
 def calculate_bmi(weight, height_cm):
     if not weight or not height_cm:
@@ -26,13 +334,33 @@ def calculate_bmi(weight, height_cm):
     return round(weight / (height_m ** 2), 1)
 
 
-def get_best_offer(product_name, quantity_offers_db, bundle_offers_db):
-    if product_name in quantity_offers_db:
-        offers = quantity_offers_db[product_name]
-        return max(offers, key=lambda x: x.get("discount_percent", 0))
+def get_best_offer(
+    product_name,
+    quantity_offers_db,
+    bundle_offers_db,
+):
+    offers = quantity_offers_db.get(product_name, [])
+
+    active_offers = [
+        offer
+        for offer in offers
+        if offer.get("new_price") is not None
+    ]
+
+    if active_offers:
+        return max(
+            active_offers,
+            key=lambda offer: (
+                offer.get("discount_percent", 0),
+                -offer.get("quantity", 1),
+            ),
+        )
 
     for bundle in bundle_offers_db:
-        if product_name in bundle.get("products", []):
+        if (
+            bundle.get("active", True)
+            and product_name in bundle.get("products", [])
+        ):
             return bundle
 
     return None
@@ -68,10 +396,20 @@ Give importance in this order:
 
 Allowed health_interests:
 - digestion
+- bloating_gas
+- constipation
+- fiber_support
+- appetite_control
 - detox
+- respiratory_support
+- smoking_reduction_support
+- glycemic_balance
+- insulin_sensitivity
+- sugar_cravings
 - weight_loss
 - muscle_gain
 - blood_regulation
+- heart_support
 - stress_anxiety
 - sleep
 
@@ -102,16 +440,27 @@ Return this exact JSON schema:
 }}
 
 Product mapping signals:
-- digestion/gas/bloating/constipation/stomach discomfort -> Colon Detox
-- detox/liver -> Liver Detox
-- weight loss/slimming/high BMI -> Slim Pack
-- blood circulation/blood regulation/heart support/anxiety/stress-related wellness -> Blood Detox
-- muscle gain -> no Shifa product unless current product database supports it
+- gas, bloating, general digestive discomfort -> Colon Detox
+- constipation, low fiber, bowel regularity, satiety -> Psyllium
+- liver or detox interest -> Liver Detox
+- weight loss or high BMI -> Slim Pack
+- lung wellness, breathing comfort, smoking reduction -> Lung Detox
+- glucose balance, insulin sensitivity, sugar cravings -> Berberine & Ceylon Cinnamon
+- blood circulation or heart support -> Blood Detox
+- muscle gain -> no product unless the product database supports it
+
+Safety:
+- Do not describe any product as treating or curing disease.
+- Berberine & Ceylon Cinnamon does not replace diabetes treatment.
+- Lung Detox does not guarantee smoking cessation.
+- Pregnancy, breastfeeding, chronic conditions, and medication use require professional advice.
 
 Important:
 - Do not invent products.
 - Use only signals, not final long explanations.
-- If anxiety is mentioned, use stress_anxiety and blood_regulation as signals.
+- If anxiety or stress is mentioned, use stress_anxiety only.
+- Use blood_regulation only when the user explicitly mentions circulation,
+  heart health, blood pressure, or another cardiovascular concern.
 
 User data:
 {json.dumps(merged_profile, ensure_ascii=False)}
@@ -141,6 +490,82 @@ def add_product(recommended_products, product, reason, quantity_offers_db, bundl
             "reason": reason,
             "offer": get_best_offer(product, quantity_offers_db, bundle_offers_db)
         })
+def normalize_product_tags(product: dict) -> set[str]:
+    tags = product.get("tags") or []
+
+    if isinstance(tags, str):
+        tags = [tag.strip() for tag in tags.split(",")]
+
+    return {
+        str(tag).lower().strip()
+        for tag in tags
+        if str(tag).strip()
+    }
+
+
+def build_user_product_signals(
+    signals: dict,
+    merged_profile: dict,
+    bmi: float | None,
+) -> set[str]:
+    user_signals = set()
+
+    for item in signals.get("health_interests", []) or []:
+        user_signals.add(str(item).lower().strip())
+
+    for item in signals.get("food_patterns", []) or []:
+        user_signals.add(str(item).lower().strip())
+
+    priority = signals.get("detected_priority_need")
+    if priority:
+        user_signals.add(str(priority).lower().strip())
+
+    for item in signals.get("recommended_product_signals", []) or []:
+        user_signals.add(str(item).lower().strip())
+
+    goals = merged_profile.get("goals") or []
+    if not isinstance(goals, list):
+        goals = [goals]
+
+    for goal in goals:
+        user_signals.add(str(goal).lower().strip())
+
+    conditions = merged_profile.get("medical_conditions") or []
+    if not isinstance(conditions, list):
+        conditions = [conditions]
+
+    conditions_text = " ".join(
+        str(condition).lower()
+        for condition in conditions
+    )
+
+
+    if "hypertension" in conditions_text:
+        user_signals.update({
+            "heart_support",
+            "circulation",
+        })
+    
+    if "diabetes" in conditions_text:
+        user_signals.update({
+            "glycemic_balance",
+            "blood sugar",
+            "insulin_sensitivity",
+        })
+
+    if bmi and bmi >= 25:
+        user_signals.update({
+            "weight_loss",
+            "weight management",
+        })
+
+    if "diabetes" in conditions_text:
+        user_signals.update({
+            "glycemic_balance",
+            "blood sugar",
+        })
+
+    return user_signals
 def normalize_moods(recent_moods):
     moods_text = " ".join([str(m).lower() for m in recent_moods])
 
@@ -178,7 +603,7 @@ def build_nutrition_strategy(merged_profile, signals):
     age = merged_profile.get("age")
    
     recent_moods = merged_profile.get("recent_moods", [])
-    avg_steps = merged_profile.get("average_steps_last_7_days", 0)
+    avg_steps = merged_profile.get("average_steps_last_7_days")
     activity_level = signals.get("activity_level", "unknown")
    
     # Weight loss
@@ -220,7 +645,41 @@ def build_nutrition_strategy(merged_profile, signals):
         ]
         strategy["avoid"].append("ultra-processed foods")
     
+    if (
+        "constipation" in health
+        or "fiber_support" in health
+    ):
+        strategy["fiber"] = "high"
+        strategy["focus"] += [
+            "gradually increased fiber",
+            "adequate water",
+            "vegetables",
+            "whole grains",
+        ]
 
+    if "appetite_control" in health:
+        strategy["focus"] += [
+            "high-satiety meals",
+            "protein-rich foods",
+            "fiber-rich foods",
+        ]
+
+    if (
+        "glycemic_balance" in health
+        or "insulin_sensitivity" in health
+        or "sugar_cravings" in health
+    ):
+        strategy["avoid"] += [
+            "sugary drinks",
+            "large sweet portions",
+            "refined carbohydrates",
+        ]
+        strategy["focus"] += [
+            "non-starchy vegetables",
+            "lean proteins",
+            "high-fiber carbohydrates",
+            "balanced meal timing",
+        ]
     # Medical conditions
 
 
@@ -276,9 +735,13 @@ def build_nutrition_strategy(merged_profile, signals):
             "fiber-rich foods"
         ]
     
-
+    
     # Activity/steps influence nutrition
-    if avg_steps < 5000 and ("weight_loss" in goals or (bmi and bmi >= 25)):
+    if (
+        avg_steps is not None
+        and avg_steps < 5000
+        and ("weight_loss" in goals or (bmi and bmi >= 25))
+    ):
         strategy["focus"] += [
             "high-satiety meals",
             "lean proteins",
@@ -288,14 +751,23 @@ def build_nutrition_strategy(merged_profile, signals):
             "large portions of bread and fried foods"
         ]
 
-    if avg_steps >= 7500 or activity_level == "high":
+    if (
+        (avg_steps is not None and avg_steps >= 7500)
+        or activity_level == "high"
+    ):
         strategy["focus"] += [
             "recovery meals",
             "adequate carbohydrates",
             "hydration"
         ]
 
-    if "muscle_gain" in goals and (avg_steps >= 5000 or activity_level in ["moderate", "high"]):
+    if (
+        "muscle_gain" in goals
+        and (
+            (avg_steps is not None and avg_steps >= 5000)
+            or activity_level in ["moderate", "high"]
+        )
+    ):
         strategy["focus"] += [
             "post-workout protein",
             "complex carbohydrates after training"
@@ -350,7 +822,487 @@ def build_nutrition_strategy(merged_profile, signals):
     strategy["focus"] = list(dict.fromkeys(strategy["focus"]))
 
     return strategy
+def find_best_bundle_for_recommendations(
+    recommended_products: list[dict],
+    bundle_offers_db: list,
+) -> dict | None:
+    recommended_names = {
+        item.get("product")
+        for item in recommended_products
+        if item.get("product")
+    }
 
+    matching_bundles = []
+
+    for bundle in bundle_offers_db:
+        if not bundle.get("active", True):
+            continue
+
+        bundle_products = set(
+            bundle.get("products") or []
+        )
+
+        overlap = recommended_names.intersection(
+            bundle_products
+        )
+
+        if len(overlap) >= 2:
+            matching_bundles.append({
+                **bundle,
+                "_overlap_count": len(overlap),
+            })
+
+    if not matching_bundles:
+        return None
+
+    matching_bundles.sort(
+        key=lambda bundle: (
+            bundle.get("_overlap_count", 0),
+            (
+                bundle.get("old_price", 0)
+                - bundle.get("new_price", 0)
+            ),
+        ),
+        reverse=True,
+    )
+
+    best = matching_bundles[0]
+    best.pop("_overlap_count", None)
+
+    return best
+def rerank_products_with_llm(
+    ranked_products: list[dict],
+    signals: dict,
+    merged_profile: dict,
+) -> list[dict]:
+    if client is None or not ranked_products:
+        return ranked_products
+
+    candidates = []
+
+    for item in ranked_products[:5]:
+        product = item["product"]
+
+        candidates.append({
+            "name": item["name"],
+            "score": item["score"],
+            "matched_signals": item["matched_signals"],
+            "tags": list(
+                normalize_product_tags(product)
+            ),
+            "benefits": (
+                product.get("benefits")
+                or []
+            )[:3],
+            "precautions": (
+                product.get("precautions")
+                or []
+            )[:3],
+        })
+
+    prompt = f"""
+You are reranking already eligible Shifa products.
+
+Do not add products.
+Do not remove medical precautions.
+Do not recommend products as treatments or cures.
+
+Return ONLY JSON:
+{{
+  "ordered_product_names": []
+}}
+
+User profile:
+{json.dumps(merged_profile, ensure_ascii=False)}
+
+Detected signals:
+{json.dumps(signals, ensure_ascii=False)}
+
+Eligible candidates:
+{json.dumps(candidates, ensure_ascii=False)}
+
+Rank the candidates from best to least relevant.
+Only use product names present in eligible candidates.
+"""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Return valid JSON only. "
+                        "Never invent a product."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": prompt,
+                },
+            ],
+            temperature=0,
+        )
+
+        data = json.loads(
+            response.choices[0].message.content.strip()
+        )
+
+        ordered_names = data.get(
+            "ordered_product_names",
+            [],
+        )
+
+        by_name = {
+            item["name"]: item
+            for item in ranked_products
+        }
+
+        ordered = [
+            by_name[name]
+            for name in ordered_names
+            if name in by_name
+        ]
+
+        remaining = [
+            item
+            for item in ranked_products
+            if item["name"] not in ordered_names
+        ]
+
+        return ordered + remaining
+
+    except Exception as exc:
+        print("Product reranking failed:", exc)
+        return ranked_products
+def apply_digestive_product_priority(
+    ranked_products: list[dict],
+    signals: dict,
+) -> list[dict]:
+    health = set(signals.get("health_interests", []) or [])
+
+    psyllium_priority = bool(
+        health.intersection({
+            "constipation",
+            "fiber_support",
+            "appetite_control",
+        })
+    )
+
+    colon_priority = bool(
+        health.intersection({
+            "digestion",
+            "bloating_gas",
+        })
+    )
+
+    if psyllium_priority and not colon_priority:
+        ranked_products = sorted(
+            ranked_products,
+            key=lambda item: (
+                item["name"] != "Psyllium",
+                -item["score"],
+            ),
+        )
+
+    elif colon_priority and not psyllium_priority:
+        ranked_products = sorted(
+            ranked_products,
+            key=lambda item: (
+                item["name"] != "Colon Detox",
+                -item["score"],
+            ),
+        )
+
+    return ranked_products
+
+def apply_product_goal_priority(
+    ranked_products: list[dict],
+    signals: dict,
+    merged_profile: dict,
+    bmi: float | None,
+) -> list[dict]:
+    """
+    Apply deterministic business priorities after scoring.
+
+    Rules:
+    - General weight-loss goal -> Slim Pack
+    - Glycemic/insulin/sugar signals -> Berberine
+    - Berberine must not replace Slim Pack for weight loss alone
+    """
+
+    health = {
+        str(item).lower().strip()
+        for item in (
+            signals.get("health_interests", [])
+            or []
+        )
+    }
+
+    recommended_signals = {
+        str(item).lower().strip()
+        for item in (
+            signals.get(
+                "recommended_product_signals",
+                [],
+            )
+            or []
+        )
+    }
+
+    goals = merged_profile.get("goals") or []
+
+    if not isinstance(goals, list):
+        goals = [goals]
+
+    goals = {
+        str(goal).lower().strip()
+        for goal in goals
+        if str(goal).strip()
+    }
+
+    all_signals = (
+        health
+        | recommended_signals
+        | goals
+    )
+
+    glycemic_signals = {
+        "glycemic_balance",
+        "insulin_sensitivity",
+        "sugar_cravings",
+        "blood sugar",
+        "glucose",
+        "insulin",
+        "diabetes",
+    }
+
+    weight_signals = {
+        "weight_loss",
+        "weight loss",
+        "weight_management",
+        "weight management",
+        "slimming",
+    }
+
+    has_glycemic_need = bool(
+        all_signals.intersection(
+            glycemic_signals
+        )
+    )
+
+    has_weight_goal = (
+        bool(
+            all_signals.intersection(
+                weight_signals
+            )
+        )
+        or (
+            bmi is not None
+            and bmi >= 25
+        )
+    )
+
+    # Explicit glycemic need:
+    # Berberine can be prioritized.
+    if has_glycemic_need:
+        return sorted(
+            ranked_products,
+            key=lambda item: (
+                item["name"]
+                != "Berberine & Ceylon Cinnamon",
+                -item["score"],
+            ),
+        )
+
+    # General weight-loss need without
+    # glycemic signals:
+    # Slim Pack must be prioritized.
+    if has_weight_goal:
+        return sorted(
+            ranked_products,
+            key=lambda item: (
+                item["name"] != "Slim Pack",
+                -item["score"],
+            ),
+        )
+
+    return ranked_products
+
+def build_product_reason(
+    product_name: str,
+    product: dict,
+    matched_signals: list[str],
+    language: str,
+) -> str:
+    fixed_reason_key = {
+        "Colon Detox": "colon_reason",
+        "Liver Detox": "liver_reason",
+        "Slim Pack": "slim_reason",
+        "Blood Detox": "blood_reason",
+        "Lung Detox": "lung_reason",
+        "Berberine & Ceylon Cinnamon": "berberine_reason",
+        "Psyllium": "psyllium_reason",
+    }.get(product_name)
+
+    if not fixed_reason_key:
+        return ""
+
+    return translated_text(
+        language,
+        fixed_reason_key,
+    )
+def score_products(
+    product_db: dict,
+    signals: dict,
+    merged_profile: dict,
+    bmi: float | None,
+) -> list[dict]:
+    user_signals = build_user_product_signals(
+        signals=signals,
+        merged_profile=merged_profile,
+        bmi=bmi,
+    )
+
+    direct_product_signals = {
+        str(item).lower().strip()
+        for item in (
+            signals.get("recommended_product_signals", [])
+            or []
+        )
+        if str(item).strip()
+    }
+
+    scored_products = []
+
+    for product_name, product in product_db.items():
+        product_tags = normalize_product_tags(product)
+
+        aliases = {
+            alias.lower().strip()
+            for alias in PRODUCT_SIGNAL_ALIASES.get(
+                product_name,
+                set(),
+            )
+        }
+
+        searchable_terms = product_tags | aliases
+
+        matches = sorted({
+            signal
+            for signal in user_signals
+            if any(
+                signal == term
+                or signal in term
+                or term in signal
+                for term in searchable_terms
+            )
+        })
+
+        score = len(matches) * 3
+
+        health = {
+            str(item).lower().strip()
+            for item in (
+                signals.get("health_interests", [])
+                or []
+            )
+        }
+
+        goals = merged_profile.get("goals") or []
+
+        if not isinstance(goals, list):
+            goals = [goals]
+
+        goals = {
+            str(goal).lower().strip()
+            for goal in goals
+            if str(goal).strip()
+        }
+
+        glycemic_signals = {
+            "glycemic_balance",
+            "insulin_sensitivity",
+            "sugar_cravings",
+            "blood sugar",
+            "glucose",
+            "insulin",
+            "diabetes",
+        }
+
+        weight_signals = {
+            "weight_loss",
+            "weight loss",
+            "weight_management",
+            "weight management",
+            "slimming",
+        }
+
+        has_glycemic_need = bool(
+            health.intersection(glycemic_signals)
+        )
+
+        has_weight_goal = (
+            bool(goals.intersection(weight_signals))
+            or (
+                bmi is not None
+                and bmi >= 25
+            )
+        )
+
+        if (
+            product_name == "Slim Pack"
+            and has_weight_goal
+        ):
+            score += 8
+
+        if (
+            product_name
+            == "Berberine & Ceylon Cinnamon"
+        ):
+            if has_glycemic_need:
+                score += 8
+
+            elif has_weight_goal:
+        # Weight loss alone is not enough
+        # to prioritize Berberine.
+                score -= 4
+
+
+
+
+        # Psyllium can support a weight-loss plan through fiber and satiety.
+        if (
+            product_name == "Psyllium"
+            and "weight_loss" in user_signals
+        ):
+            score += 3
+
+            if "satiety support for weight loss" not in matches:
+                matches.append(
+                    "satiety support for weight loss"
+                )
+        normalized_product_name = product_name.lower().strip()
+
+        if normalized_product_name in direct_product_signals:
+            score += 6
+
+            if normalized_product_name not in matches:
+                matches.append(normalized_product_name)
+
+        if score > 0:
+            scored_products.append({
+                "name": product_name,
+                "product": product,
+                "score": score,
+                "matched_signals": matches,
+            })
+
+    return sorted(
+        scored_products,
+        key=lambda item: item["score"],
+        reverse=True,
+    )
 def build_exercise_strategy(merged_profile, signals):
 
     strategy = {
@@ -368,7 +1320,7 @@ def build_exercise_strategy(merged_profile, signals):
         "reasoning": []
     }
 
-    avg_steps = merged_profile.get("average_steps_last_7_days", 0)
+    avg_steps = merged_profile.get("average_steps_last_7_days")
     activity = signals.get("activity_level")
     age = merged_profile.get("age")
     goals = merged_profile.get("goals", [])
@@ -380,7 +1332,7 @@ def build_exercise_strategy(merged_profile, signals):
     health = signals.get("health_interests", [])
    
     recent_moods = merged_profile.get("recent_moods", [])
-    consistency = merged_profile.get("consistency_score") or 0
+    consistency = merged_profile.get("consistency_score")
     recurring_activity_patterns = merged_profile.get("recurring_activity_patterns", [])
     low_activity_count = recurring_activity_patterns.count("low")
     moderate_activity_count = recurring_activity_patterns.count("moderate")
@@ -400,7 +1352,16 @@ def build_exercise_strategy(merged_profile, signals):
     moods_text = normalize_moods(recent_moods)
 
 # Step-based base level
-    if avg_steps < 5000:
+
+    if avg_steps is None:
+        strategy["focus"] = "activity level not yet measured"
+        strategy["step_goal"] = ""
+        strategy["reasoning"].append(
+            "No step history available: avoid assuming sedentary behavior"
+        )
+
+    
+    elif avg_steps < 5000:
         strategy["focus"] = "increase daily movement"
         strategy["step_goal"] = "start with 5000–7000 steps/day"
         strategy["duration"] = "20-30 minutes"
@@ -519,6 +1480,10 @@ def build_exercise_strategy(merged_profile, signals):
         "intensity": strategy.get("intensity"),
         "step_goal": strategy.get("step_goal"),
         "extra": list(dict.fromkeys(strategy.get("exercise_examples", [])))[:3],
+        
+ 
+        "frequency": strategy.get("frequency"),
+    
     }
 
 
@@ -538,7 +1503,8 @@ def build_exercise_strategy(merged_profile, signals):
             "duration": "15-30 minutes",
             "intensity": "light",
             "step_goal": "gentle movement only if approved",
-            "extra": ["avoid intense exercise", "rest if tired"]
+            "extra": ["avoid intense exercise", "rest if tired"],
+            "frequency": strategy["frequency"]
         }
 
 
@@ -553,14 +1519,38 @@ def build_exercise_strategy(merged_profile, signals):
             "duration": strategy.get("duration"),
             "intensity": "light to moderate",
             "step_goal": strategy.get("step_goal"),
-            "extra": ["avoid sudden intense effort"]
+            "extra": ["avoid sudden intense effort"],
+            "frequency": strategy.get("frequency")
+
         }
 
     elif age and age >= 60:
-        strategy["main_activity"] = "walking, mobility, balance, and light resistance training"
+        strategy["main_activity"] = (
+            "walking, mobility, balance, and light resistance training"
+        )
+        strategy["duration"] = "20-30 minutes"
         strategy["intensity"] = "light to moderate"
         strategy["frequency"] = "most days of the week"
-        strategy["reasoning"].append("Older adult safety adaptation")
+        strategy["reasoning"].append(
+            "Older adult safety adaptation"
+        )
+
+        strategy["today_program"] = {
+            "focus": "balance, mobility, and gentle strength",
+            "activity": (
+                "walking, balance exercises, mobility, "
+                "and light resistance training"
+            ),
+            "duration": strategy["duration"],
+            "frequency": strategy["frequency"],
+            "intensity": strategy["intensity"],
+            "step_goal": strategy.get("step_goal"),
+            "extra": [
+                "use support if balance is uncertain",
+                "avoid sudden high-impact effort",
+                "stop if pain or dizziness occurs",
+            ],
+        }
     return strategy
 
 def generate_dynamic_plan_with_llm(
@@ -577,15 +1567,39 @@ def generate_dynamic_plan_with_llm(
         "daily_actions": [],
         "warnings": []
     }
+    language = normalize_language(
+        merged_profile.get("language", "ar")
+    )
+
+    language_name = LANGUAGE_NAMES[language]
+
+    language_instruction = f"""
+    STRICT OUTPUT LANGUAGE: {language_name}
+
+    Every user-visible JSON value must be written only in {language_name}:
+    - behavioral_insight
+    - meal titles
+    - meal recommendations
+    - meal reasons
+    - exercise titles
+    - exercise recommendations
+    - exercise reasons
+    - daily actions
+    - daily-action reasons
+    - motivation_message
+
+    Do not mix Arabic, French, and English.
+    Product names such as Slim Pack, Colon Detox, Liver Detox, Blood Detox,
+    Lung Detox, Psyllium, and Berberine & Ceylon Cinnamon may remain unchanged.
+    """
     
-    language = merged_profile.get("language", "ar")
 
     if client is None:
         return fallback
 
     prompt = f"""
 You are a wellness recommendation assistant for Shifa.
-
+{language_instruction}
 Generate personalized:
 1. meal recommendations
 2. exercise recommendations
@@ -671,7 +1685,37 @@ Advanced reasoning rules:
 - Today’s program must vary the exercise type/body focus depending on all available data: goal, BMI, age, sex, medical conditions, moods, average steps, activity_level, food patterns, health interests, recurring behaviors, chat history, and consistency.
 - Mention body focus when available: upper body, lower body, core, cardio, mobility, recovery.
 - Respect intensity, duration, frequency, step_goal, limitations and medical safety rules.
-Generate a complete personalized exercise session for today.
+Generate ONE structured workout for today.
+
+Return:
+
+- title
+- description
+- duration
+- frequency
+- intensity
+- warmup
+- 3 to 5 main exercises
+- cooldown
+- reason
+
+Example:
+
+{{
+"title":"Today's Walking Session",
+"description":"A beginner-friendly cardio session.",
+"duration":"30 minutes",
+"frequency":"Today",
+"intensity":"Light",
+"warmup":"5 minutes easy walking",
+"main_workout":[
+"15 min brisk walking",
+"10 squats",
+"10 wall push-ups"
+],
+"cooldown":"5 minutes stretching",
+"reason":"Suitable for your current activity level."
+}}
 
 Use exercise_strategy.today_program as the main guidance.
 
@@ -693,7 +1737,21 @@ Adapt the exercises according to:
 If the user has low energy, low consistency, or low activity, propose simpler exercises.
 
 If the user is energetic and has no medical restrictions, propose more challenging exercises.
+The deterministic rule engine has already selected today's focus, duration,
+intensity, step goal, medical limitations, and suitable activity category.
 
+You must generate the exact warm-up, exercises, sets/repetitions, and cooldown
+within these constraints.
+
+Never change:
+- exercise_strategy.today_program.focus
+- exercise_strategy.today_program.duration
+- exercise_strategy.today_program.intensity
+- exercise_strategy.today_program.step_goal
+- medical safety overrides
+
+Do not generate an exercise that conflicts with the user's medical conditions,
+age, BMI, activity level, consistency, or today's selected focus.
 Do not recommend unsafe exercises. Medical conditions always override fitness goals.
 Cultural adaptation rules:
 - Adapt meal recommendations to Tunisian food culture when appropriate.
@@ -734,7 +1792,13 @@ Your role is only to transform these strategies into:
 - realistic meals
 - suitable exercises
 - practical daily actions
-
+The behavioral_insight must speak directly to the user.
+Do not say "the user".
+Use a friendly coaching tone.
+For French, address the person with "vous".
+For Arabic, speak directly and naturally to the person.
+For English, use "you".
+Keep it to 1–3 short sentences.
 Always follow the provided strategies.
 Do not recommend extreme diets or unrealistic workouts.
 
@@ -770,13 +1834,25 @@ JSON schema:
       "reason": ""
     }}
   ],
-  "exercise_recommendations": [
+  
+  "exercise_recommendations":[
     {{
-      "title": "",
-      "recommendation": "",
-      "reason": ""
+      "title":"",
+      "description":"",
+      "duration":"",
+      "frequency":"",
+      "intensity":"",
+      "warmup":"",
+      "main_workout":[
+        "",
+        "",
+        ""
+      ],
+      "cooldown":"",
+      "reason":""
     }}
   ],
+
   "daily_actions": [
     {{
       "action": "",
@@ -801,7 +1877,7 @@ JSON schema:
                     "content": prompt
                 }
             ],
-            temperature=0.7
+            temperature=0.5
         )
 
         content = response.choices[0].message.content.strip()
@@ -825,8 +1901,11 @@ def build_recommendation_decision(
     goals = merged_profile.get("goals", [])
     goals_text = " ".join(goals).lower() if isinstance(goals, list) else str(goals).lower() 
     age = merged_profile.get("age")
-    consistency = merged_profile.get("consistency_score") or 0
+    consistency = merged_profile.get("consistency_score")
     conditions = merged_profile.get("medical_conditions", [])
+    language = normalize_language(
+        merged_profile.get("language", "ar")
+    )
     decision = {
         "priority_focus": None,
         "recommended_products": [],
@@ -854,6 +1933,13 @@ def build_recommendation_decision(
             "activity": False,
         }
     }
+
+    decision["used_signals"]["memory"] = bool(
+        merged_profile.get("past_recommended_products")
+        or merged_profile.get("recurring_food_patterns")
+        or merged_profile.get("recurring_activity_patterns")
+        or merged_profile.get("last_detected_issue")
+    )
     if goals:
         decision["used_signals"]["profile"] = True
 
@@ -862,32 +1948,46 @@ def build_recommendation_decision(
 
     if activity_level != "unknown":
         decision["used_signals"]["activity"] = True
+
+
     # -------------------------
     # 1. Decide priority focus
     # -------------------------
-    if priority_need:
-        decision["priority_focus"] = priority_need
-        decision["used_signals"]["daily_checkin"] = True
-
-    elif health_interests:
+    if health_interests:
         decision["priority_focus"] = health_interests[0]
-        decision["used_signals"]["memory"] = True
 
-    elif "weight loss" in goals_text or "weightloss" in goals_text:
+        decision["used_signals"]["daily_checkin"] = bool(
+            merged_profile.get("recent_checkins")
+        )
+
+    elif priority_need:
+        decision["priority_focus"] = priority_need
+
+        decision["used_signals"]["daily_checkin"] = bool(
+            merged_profile.get("recent_checkins")
+        )
+
+    elif (
+        "weight_loss" in goals_text
+        or "weight loss" in goals_text
+        or "weightloss" in goals_text
+    ):
         decision["priority_focus"] = "weight_loss"
         decision["used_signals"]["profile"] = True
 
-   
     elif "muscle_gain" in goals_text:
         decision["priority_focus"] = "muscle_gain"
         decision["used_signals"]["profile"] = True
+
+    elif "general_wellness" in goals_text:
+        decision["priority_focus"] = "general_wellness"
+
     elif bmi and bmi >= 25:
         decision["priority_focus"] = "weight_management"
         decision["used_signals"]["bmi"] = True
 
     else:
         decision["priority_focus"] = "general_wellness"
-    # -------------------------
 # Advanced behavioral logic
 # -------------------------
 
@@ -897,8 +1997,8 @@ def build_recommendation_decision(
         and activity_level == "low"
     ):
         decision["daily_actions"].append({
-            "action": "Increase movement progressively",
-            "reason": "Low activity level and low step count require gradual adaptation."
+            "action": translated_text(language, "movement_action"),
+            "reason": translated_text(language, "movement_reason"),
         })
     if (
         bmi and bmi >= 28
@@ -909,117 +2009,277 @@ def build_recommendation_decision(
 
     if "stress_anxiety" in health_interests:
         decision["daily_actions"].append({
-            "action": "Improve sleep quality and reduce stress",
-            "reason": "Stress management supports recovery and overall wellbeing."
+            "action": translated_text(language, "stress_action"),
+            "reason": translated_text(language, "stress_reason"),
         })
-    if consistency < 40:
+    if consistency is not None and consistency < 40:
         decision["daily_actions"].append({
-            "action": "Start with small achievable habits",
-            "reason": "Gradual changes improve long-term consistency."
+            "action": translated_text(language, "small_habits_action"),
+            "reason": translated_text(language, "small_habits_reason"),
         })
     conditions_text = " ".join(conditions).lower() if isinstance(conditions, list) else str(conditions).lower()
-
+    
     if "pregnancy" in conditions_text or "breastfeeding" in conditions_text:
         decision["priority_focus"] = "pregnancy_safe_wellness"
         decision["warnings"].append(
-            "في فترة الحمل أو الرضاعة، استشيري الطبيب قبل استعمال أي مكمل غذائي."
+            translated_text(language, "pregnancy_warning")
         )
         decision["confidence_score"] = 70
         return decision
     # -------------------------
     # 2. Product decision
     # -------------------------
-    if "digestion" in health_interests or decision["priority_focus"] == "digestion":
-        add_product(
-            decision["recommended_products"],
-            "Colon Detox",
-            "Best match for digestion, bloating, gas, and constipation support.",
-            quantity_offers_db,
-            bundle_offers_db
+    language = normalize_language(
+        merged_profile.get("language", "ar")
+    )
+
+    product_db = get_product_knowledge_dict()
+
+    ranked_products = score_products(
+        product_db=product_db,
+        signals=signals,
+        merged_profile=merged_profile,
+        bmi=bmi,
+    )
+
+    ranked_products = apply_digestive_product_priority(
+        ranked_products,
+        signals,
+    )
+
+    ranked_products = apply_product_goal_priority(
+        ranked_products=ranked_products,
+        signals=signals,
+        merged_profile=merged_profile,
+        bmi=bmi,
+    )
+
+    # Optional AI reranking:
+    # It can only reorder products already approved by the deterministic scorer.
+    if ranked_products:
+        # Keep the deterministic top product locked.
+        locked_top_product = ranked_products[0]
+
+        other_products = ranked_products[1:]
+
+        if other_products:
+            best_other_score = other_products[0]["score"]
+
+            eligible_for_reranking = [
+                item
+                for item in other_products
+                if item["score"]
+                >= best_other_score - 3
+            ]
+
+            remaining_products = [
+                item
+                for item in other_products
+                if item["score"]
+                < best_other_score - 3
+            ]
+
+            eligible_for_reranking = (
+                rerank_products_with_llm(
+                    ranked_products=(
+                        eligible_for_reranking
+                    ),
+                    signals=signals,
+                    merged_profile=merged_profile,
+                )
+            )
+
+            ranked_products = [
+                locked_top_product,
+                *eligible_for_reranking,
+                *remaining_products,
+            ]
+    MIN_PRODUCT_SCORE = 6
+
+    for ranked in ranked_products:
+        if ranked["score"] < MIN_PRODUCT_SCORE:
+            continue
+
+        product_name = ranked["name"]
+        product = ranked["product"]
+
+        reason = build_product_reason(
+            product_name=product_name,
+            product=product,
+            matched_signals=ranked["matched_signals"],
+            language=language,
         )
 
-    if "detox" in health_interests or decision["priority_focus"] == "detox":
-        add_product(
-            decision["recommended_products"],
-            "Liver Detox",
-            "Best match for liver support and detox routine.",
+        offer = get_best_offer(
+            product_name,
             quantity_offers_db,
-            bundle_offers_db
+            bundle_offers_db,
         )
-
-    if (
-        "weight_loss" in health_interests
-        or decision["priority_focus"] == "weight_loss"
-        or "weight loss" in goals_text
-        or "weightloss" in goals_text
-    ):
-        add_product(
-            decision["recommended_products"],
-            "Slim Pack",
-            "Best match for weight-management support.",
-            quantity_offers_db,
-            bundle_offers_db
+        loyalty_info = build_product_loyalty_message(
+            user_code=merged_profile["user_code"],
+            product_name=product_name,
+            language=merged_profile.get("language", "ar"),
         )
-
-    if (
-        "blood_regulation" in health_interests
-        or "stress_anxiety" in health_interests
-        or decision["priority_focus"] in ["blood_regulation", "stress_anxiety"]
-    ):
-        add_product(
-            decision["recommended_products"],
-            "Blood Detox",
-            "Best match for circulation, blood regulation, and stress/anxiety-related wellness support.",
-            quantity_offers_db,
-            bundle_offers_db
-        )
-
+        decision["recommended_products"].append({
+            "product": product_name,
+            "reason": reason,
+            "offer": offer,
+            "price": product.get("price"),
+            "currency": product.get("currency", "TND"),
+            "image_emoji": product.get("image_emoji") or "🌿",
+            "category": product.get("category"),
+            "benefits": (product.get("benefits") or [])[:3],
+            "matched_signals": ranked["matched_signals"],
+            "score": ranked["score"],
+            "loyalty_recommendation": loyalty_info,
+        })
  
+
+
     # -------------------------
     if decision["recommended_products"]:
-        decision["warnings"].append("منتجات شفاء مكملات غذائية وليست أدوية، ولا تعوض الطبيب.")
+        decision["warnings"].append(
+            translated_text(language, "supplement_warning")
+        )
+    
+    selected_product_names = {
+        item.get("product")
+        for item in decision["recommended_products"]
+    }
 
-    if priority_need in ["digestion", "detox", "blood_regulation", "stress_anxiety"]:
-        decision["warnings"].append("إذا الأعراض متكررة أو قوية، الأفضل استشارة مختص.")
+    if "Berberine & Ceylon Cinnamon" in selected_product_names:
+        decision["warnings"].append(
+            translated_text(
+                language,
+                "chronic_condition_warning",
+            )
+        )
+
+    if "Lung Detox" in selected_product_names:
+        decision["warnings"].append(
+            translated_text(
+                language,
+                "persistent_symptoms_warning",
+            )
+        )
+    
+    conditions_text = " ".join(
+        str(condition).lower()
+        for condition in conditions
+    )
+
+    if (
+        "diabetes" in conditions_text
+        and "Berberine & Ceylon Cinnamon" in selected_product_names
+    ):
+        decision["warnings"].append(
+            translated_text(language, "diabetes_warning")
+        )
+
+    if (
+        "hypertension" in conditions_text
+        and "Blood Detox" in selected_product_names
+    ):
+        decision["warnings"].append(
+            translated_text(language, "hypertension_warning")
+        )
+
+    if priority_need in [
+        "digestion",
+        "bloating_gas",
+        "constipation",
+        "detox",
+        "respiratory_support",
+        "smoking_reduction_support",
+        "glycemic_balance",
+        "insulin_sensitivity",
+        "blood_regulation",
+        "heart_support",
+        "stress_anxiety",
+    ]:
+        decision["warnings"].append(
+            translated_text(
+                language,
+                "persistent_symptoms_warning",
+            )
+        )
 
     # -------------------------
     # 6. Upsell strategy
     # -------------------------
-    if decision["recommended_products"]:
-        first_product = decision["recommended_products"][0]["product"]
+    best_bundle = find_best_bundle_for_recommendations(
+        decision["recommended_products"],
+        bundle_offers_db,
+    )
+
+    if best_bundle:
+
+        decision["upsell_strategy"] = {
+            "products": best_bundle.get("products", []),
+            "offer": best_bundle,
+            "message": translated_text(
+                language,
+                "best_offer",
+            ),
+        }
+
+    elif decision["recommended_products"]:
+
+        first_product = (
+            decision["recommended_products"][0]["product"]
+        )
+
         offer = get_best_offer(
             first_product,
             quantity_offers_db,
-            bundle_offers_db
+            bundle_offers_db,
         )
 
         if offer:
+
             decision["upsell_strategy"] = {
                 "product": first_product,
                 "offer": offer,
-                "message": "أفضل عرض متاح لهذا المنتج."
+                "message": translated_text(
+                    language,
+                    "best_offer",
+                ),
             }
 
     # -------------------------
     # 7. Confidence score
     # -------------------------
-    confidence = 40
+    confidence = 20
+
+    if goals:
+        confidence += 15
+
+    if bmi:
+        confidence += 10
+
+    if conditions:
+        confidence += 10
 
     if health_interests:
-        confidence += 20
-    if priority_need:
         confidence += 15
-    if goals:
-        confidence += 10
-    if bmi:
+
+    if merged_profile.get("recent_checkins"):
+        confidence += 15
+
+    if merged_profile.get("recent_chat_history"):
         confidence += 5
-    if activity_level != "unknown":
+
+    memory_has_useful_patterns = bool(
+        merged_profile.get("past_recommended_products")
+        or merged_profile.get("recurring_food_patterns")
+        or merged_profile.get("recurring_activity_patterns")
+        or merged_profile.get("last_detected_issue")
+    )
+
+    if memory_has_useful_patterns:
         confidence += 10
-    if conditions:
-        decision["warnings"].append(
-            "إذا عندك مرض مزمن أو تستعمل أدوية، استشر طبيب أو صيدلي قبل استعمال أي مكمل غذائي."
-        )
-    decision["confidence_score"] = min(confidence, 100)
+
+    decision["confidence_score"] = min(confidence, 95)
 
     return decision
 
@@ -1039,7 +2299,8 @@ def build_recommendation_agent_output(user_profile: dict):
 
     average_steps_last_7_days = (
         sum(recent_steps) / len(recent_steps)
-        if recent_steps else 0
+        if recent_steps
+        else None
     )
     recent_chat_history = get_recent_chat_history(user_id, days=90, limit=100)
     quantity_offers_db = get_quantity_offers_dict()
@@ -1052,7 +2313,11 @@ def build_recommendation_agent_output(user_profile: dict):
         "goals": user_profile.get("goals") or profile.get("goals", []),
         "average_steps_last_7_days": average_steps_last_7_days,
         "medical_conditions": user_profile.get("medical_conditions") or profile.get("medical_conditions", []),
-        "language": user_profile.get("language", "ar"),
+        "language": normalize_language(
+            user_profile.get("language")
+            or profile.get("language")
+            or "ar"
+        ),
         "sex": user_profile.get("sex") or profile.get("sex"),
    
         "trend_analysis": memory.get("trend_analysis"),
@@ -1153,7 +2418,16 @@ def build_recommendation_agent_output(user_profile: dict):
 
         "meal_recommendations": dynamic_plan.get("meal_recommendations", []),
         "exercise_recommendations": dynamic_plan.get("exercise_recommendations", []),
-        "daily_actions": dynamic_plan.get("daily_actions", []),
+        "daily_actions": list({
+            (
+                item.get("action", ""),
+                item.get("reason", ""),
+            ): item
+            for item in (
+                decision.get("daily_actions", [])
+                + dynamic_plan.get("daily_actions", [])
+            )
+        }.values()),
         "behavioral_insight": dynamic_plan.get("behavioral_insight", ""),
         "motivation_message": dynamic_plan.get("motivation_message", ""),
         "warnings": dynamic_plan.get("warnings", []) + decision.get("warnings", []),
@@ -1161,8 +2435,13 @@ def build_recommendation_agent_output(user_profile: dict):
         "upsell_strategy": decision["upsell_strategy"],
         "confidence_score": decision["confidence_score"],
 
-        "reasoning_summary": signals.get("reasoning_summary", "")
-            or "Recommendation generated from profile, memory, and daily check-in.",
+        "reasoning_summary": (
+            dynamic_plan.get("behavioral_insight")
+            or translated_text(
+                merged_profile.get("language", "ar"),
+                "fallback_reasoning"
+            )
+        ),
 
         "llm_signals": signals,
         "decision_layer": decision

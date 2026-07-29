@@ -3,6 +3,7 @@ import json
 from openai import OpenAI
 import os
 from dotenv import load_dotenv
+from food_db import estimate_meal_calories
 
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -15,6 +16,7 @@ Extract structured signals from the user's daily check-in.
 Return ONLY valid JSON with this exact schema:
 {{
   "food_patterns": [],
+  "food_items": [],
   "activity_level_today": "low/moderate/high/unknown",
   "activity_duration_minutes": null,
   "health_interests": [],
@@ -23,6 +25,12 @@ Return ONLY valid JSON with this exact schema:
   "activity_summary": "",
   "mood": ""
 }}
+
+food_items: list of foods/dishes mentioned, one entry per dish, as:
+  {{"name": "<dish name, keep original language>", "portion": "small/medium/large"}}
+  - Infer portion from context (e.g. "beaucoup" -> large, "un peu" -> small).
+  - If portion is not mentioned at all, use "medium".
+  - Split combined meals into separate items (e.g. "couscous poulet ou salade" -> two items).
 
 Allowed food_patterns:
 - heavy_meals
@@ -34,10 +42,22 @@ Allowed food_patterns:
 
 Allowed health_interests:
 - digestion
+- bloating_gas
+- constipation
+- fiber_support
+- appetite_control
 - detox
+- respiratory_support
+- smoking_reduction_support
+- glycemic_balance
+- insulin_sensitivity
+- sugar_cravings
 - weight_loss
 - muscle_gain
 - blood_regulation
+- heart_support
+- stress_anxiety
+- sleep
 
 Rules:
 - If user mentions gas, bloating, constipation, stomach discomfort, digestion issues → health_interests includes digestion
@@ -73,6 +93,7 @@ Mood:
     except Exception:
         return {
             "food_patterns": detect_food_patterns(meals_today),
+            "food_items": [],
             "activity_level_today": detect_activity_level(activity_today),
             "activity_duration_minutes": None,
             "health_interests": detect_health_interests(meals_today),
@@ -86,14 +107,27 @@ def estimate_daily_energy_with_llm(
     user_profile: dict,
     meals_today: str,
     activity_today: str,
-    mood: str = ""
+    mood: str = "",
+    food_items: list | None = None,
 ) -> dict:
     language = user_profile.get("language", "ar")
 
+    # --- Step 1: local nutrition table for known dishes (deterministic) ---
+    local_result = estimate_meal_calories(food_items or [])
+    known_calories = local_result["known_calories_total"]
+    unresolved_items = local_result["items_needing_llm_estimate"]
+    table_confidence = local_result["confidence"]
+
+    # --- Step 2: LLM only fills the gaps (unknown foods + activity burn +
+    # a short human insight). Much smaller/cheaper prompt than before, and
+    # the calorie figure for known dishes no longer varies between calls. ---
     prompt = f"""
 You are a wellness estimation assistant.
 
-Estimate the user's daily energy balance from free-text check-in.
+Some foods in this check-in were already matched against a local nutrition
+table and their calories are already known (see "already_known_calories"
+below) — do NOT re-estimate those, only handle the items listed under
+"unresolved_food_items".
 
 Return ONLY valid JSON.
 
@@ -102,8 +136,8 @@ Language for text fields: {language}
 User profile:
 {json.dumps(user_profile, ensure_ascii=False)}
 
-Meals today:
-{meals_today}
+Already known calories (from local table, do not change): {known_calories}
+Unresolved food items needing an estimate: {unresolved_items}
 
 Activity today:
 {activity_today}
@@ -113,22 +147,18 @@ Mood:
 
 Return this JSON schema:
 {{
-  "estimated_calories_in": null,
+  "unresolved_items_calories": null,
   "estimated_calories_burned": null,
-  "estimated_net_calories": null,
-  "estimated_weekly_weight_change_kg": null,
-  "weight_trend": "",
   "assumptions": [],
   "insight_message": ""
 }}
 
 Rules:
-- Use realistic approximate values.
+- unresolved_items_calories: sum of realistic calorie estimates for ONLY
+  the items in "unresolved_food_items" (0 or null if that list is empty).
+- Use realistic approximate values for activity calories burned.
 - Do not present estimates as exact medical facts.
 - If data is missing, use null and explain in assumptions.
-- estimated_net_calories = estimated_calories_in - estimated_calories_burned.
-- 7700 kcal ≈ 1 kg body weight.
-- weekly weight change = daily surplus/deficit * 7 / 7700.
 - If language is fr, write text fields in French.
 - If language is ar, write text fields in Arabic/Tunisian Arabic.
 """
@@ -143,18 +173,45 @@ Rules:
             temperature=0.2
         )
 
-        return json.loads(response.choices[0].message.content.strip())
+        llm_part = json.loads(response.choices[0].message.content.strip())
 
     except Exception:
-        return {
-            "estimated_calories_in": None,
+        llm_part = {
+            "unresolved_items_calories": None,
             "estimated_calories_burned": None,
-            "estimated_net_calories": None,
-            "estimated_weekly_weight_change_kg": None,
-            "weight_trend": "",
-            "assumptions": ["Energy estimation unavailable."],
+            "assumptions": ["Energy estimation unavailable for unresolved items."],
             "insight_message": ""
         }
+
+    unresolved_calories = llm_part.get("unresolved_items_calories") or 0
+    estimated_calories_in = (known_calories + unresolved_calories) or None
+    estimated_calories_burned = llm_part.get("estimated_calories_burned")
+
+    estimated_net_calories = None
+    estimated_weekly_weight_change_kg = None
+    weight_trend = ""
+
+    if estimated_calories_in is not None and estimated_calories_burned is not None:
+        estimated_net_calories = estimated_calories_in - estimated_calories_burned
+        estimated_weekly_weight_change_kg = round((estimated_net_calories * 7) / 7700, 2)
+        if estimated_net_calories > 200:
+            weight_trend = "possible gain"
+        elif estimated_net_calories < -200:
+            weight_trend = "possible loss"
+        else:
+            weight_trend = "stable"
+
+    return {
+        "estimated_calories_in": estimated_calories_in,
+        "estimated_calories_burned": estimated_calories_burned,
+        "estimated_net_calories": estimated_net_calories,
+        "estimated_weekly_weight_change_kg": estimated_weekly_weight_change_kg,
+        "weight_trend": weight_trend,
+        "assumptions": llm_part.get("assumptions", []),
+        "insight_message": llm_part.get("insight_message", ""),
+        "calorie_estimate_confidence": table_confidence,
+        "calorie_breakdown": local_result["items"],
+    }
 
 def detect_food_patterns(meals_text: str) -> list:
     text = (meals_text or "").lower()
@@ -276,30 +333,90 @@ def estimate_activity_calories(weight, duration_minutes, intensity):
 
     calories = met * weight * (duration_minutes / 60)
     return round(calories)
+def estimate_steps_calories(weight, steps):
+    if not weight or not steps:
+        return 0
 
-def structured_energy_calculation(user_profile, extracted):
+    try:
+        steps = int(steps)
+        weight = float(weight)
+    except (TypeError, ValueError):
+        return 0
+
+    if steps <= 0:
+        return 0
+
+    # Approximate calorie burn based on body weight
+    calories_per_step = 0.0005 * weight
+
+    return round(steps * calories_per_step)
+
+def structured_energy_calculation(
+    user_profile: dict,
+    extracted: dict,
+    steps: int = 0,
+) -> dict:
     weight = user_profile.get("weight")
     height = user_profile.get("height")
     age = user_profile.get("age")
     sex = user_profile.get("sex")
 
-    activity_level = extracted.get("activity_level_today", "unknown")
-    duration = extracted.get("activity_duration_minutes")
-
-    bmr = calculate_bmr(weight, height, age, sex)
-
-    calories_burned_activity = estimate_activity_calories(
-        weight=weight,
-        duration_minutes=duration,
-        intensity=activity_level
+    activity_level = extracted.get(
+        "activity_level_today",
+        "unknown",
     )
 
-    tdee = calculate_tdee(bmr, activity_level)
+    duration = extracted.get(
+        "activity_duration_minutes"
+    )
+
+    bmr = calculate_bmr(
+        weight,
+        height,
+        age,
+        sex,
+    )
+
+    sedentary_tdee = (
+        round(bmr * 1.2)
+        if bmr is not None
+        else None
+    )
+
+    workout_calories = (
+        estimate_activity_calories(
+            weight=weight,
+            duration_minutes=duration,
+            intensity=activity_level,
+        )
+        or 0
+    )
+
+    steps_calories = estimate_steps_calories(
+        weight=weight,
+        steps=steps,
+    )
+
+    total_activity_calories = (
+        workout_calories + steps_calories
+    )
+
+    total_calories_burned = (
+        sedentary_tdee + total_activity_calories
+        if sedentary_tdee is not None
+        else None
+    )
 
     return {
         "bmr": bmr,
-        "tdee": tdee,
-        "estimated_activity_calories_burned": calories_burned_activity,
+        "sedentary_tdee": sedentary_tdee,
+        "tdee": total_calories_burned,
+
+        "estimated_workout_calories_burned": workout_calories,
+        "estimated_steps_calories_burned": steps_calories,
+        "estimated_activity_calories_burned": total_activity_calories,
+
+        "steps": steps,
         "activity_duration_minutes": duration,
         "activity_intensity": activity_level,
     }
@@ -453,19 +570,25 @@ def build_daily_checkin_output(
     user_profile: dict,
     meals_today: str,
     activity_today: str,
-    mood: str = ""
+    mood: str = "",
+    steps: int = 0,
 ) -> dict:
     user_profile = user_profile or {}
     goals = user_profile.get("goals", [])
     goals_text = " ".join(goals).lower() if isinstance(goals, list) else str(goals).lower()
 
     extracted = extract_checkin_with_llm(meals_today, activity_today, mood)
-    structured_energy = structured_energy_calculation(user_profile, extracted)
+    structured_energy = structured_energy_calculation(
+        user_profile=user_profile,
+        extracted=extracted,
+        steps=steps,
+    )
     energy_estimation = estimate_daily_energy_with_llm(
         user_profile,
         meals_today,
         activity_today,
-        mood
+        mood,
+        food_items=extracted.get("food_items", []),
     )
     
     bmr = structured_energy.get("bmr")
@@ -483,16 +606,56 @@ def build_daily_checkin_output(
         energy_estimation.get("estimated_calories_in") is not None
         and energy_estimation.get("estimated_calories_burned") is not None
     ):
-        net = energy_estimation["estimated_calories_in"] - energy_estimation["estimated_calories_burned"]
-        energy_estimation["estimated_net_calories"] = net
-        energy_estimation["estimated_weekly_weight_change_kg"] = round((net * 7) / 7700, 2)
 
-        if net > 200:
-            energy_estimation["weight_trend"] = "possible gain"
-        elif net < -200:
-            energy_estimation["weight_trend"] = "possible loss"
+        net = (
+            energy_estimation["estimated_calories_in"]
+            - energy_estimation["estimated_calories_burned"]
+        )
+
+        energy_estimation["estimated_net_calories"] = net
+
+    # Don't predict weekly weight change if today's food log is probably incomplete
+        if energy_estimation["estimated_calories_in"] < 800:
+
+            energy_estimation["estimated_weekly_weight_change_kg"] = None
+            energy_estimation["weight_trend"] = "unknown"
+            energy_estimation["prediction_available"] = False
+
+            assumptions = energy_estimation.get("assumptions", [])
+            language = user_profile.get("language", "ar")
+
+            if language == "fr":
+                message = (
+                    "L'apport alimentaire de la journée semble incomplet. "
+                    "La prédiction hebdomadaire du poids n'a pas été calculée."
+                )
+
+            elif language == "en":
+                message = (
+                    "Today's food intake appears incomplete. "
+                    "Weekly weight prediction was not calculated."
+                )
+
+            else:
+                message = (
+                    "يبدو أن تسجيل الوجبات لليوم غير مكتمل، لذلك لم يتم حساب توقع تغير الوزن الأسبوعي."
+                )
+
+            assumptions.append(message)
+            energy_estimation["assumptions"] = assumptions
+
         else:
-            energy_estimation["weight_trend"] = "stable"
+            energy_estimation["prediction_available"] = True
+            weekly_change = round((net * 7) / 7700, 2)
+
+            energy_estimation["estimated_weekly_weight_change_kg"] = weekly_change
+
+            if net > 200:
+                energy_estimation["weight_trend"] = "possible gain"
+            elif net < -200:
+                energy_estimation["weight_trend"] = "possible loss"
+            else:
+                energy_estimation["weight_trend"] = "stable"
 
     food_patterns = extracted.get("food_patterns", [])
     health_interests = extracted.get("health_interests", [])

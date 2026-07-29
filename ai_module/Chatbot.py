@@ -1,6 +1,10 @@
 import os
 from dotenv import load_dotenv
 from openai import OpenAI
+from rapidfuzz import fuzz
+from ai_module.dashboard import (
+    build_product_loyalty_message,
+)
 from ai_module.decision_engine import build_decision_output
 from ai_module.user_memory_db import (
     get_user_memory,
@@ -8,11 +12,17 @@ from ai_module.user_memory_db import (
     update_user_memory,
     log_chat_interaction
 )
+from ai_module.recommendation_agent import (
+    apply_digestive_product_priority,
+    score_products,
+    build_product_reason
+)
 from ai_module.product_db import (
     get_product_knowledge_dict,
     get_quantity_offers_dict,
-    get_bundle_offers
-)
+    get_bundle_offers,
+    get_all_products,
+)  
 load_dotenv()
 
 api_key = os.getenv("OPENAI_API_KEY")
@@ -127,345 +137,15 @@ Description: Shifa is a wellness and supplement brand.
 General rule: Shifa products are dietary supplements, not medications.
 They support a healthy lifestyle and do not replace medical advice.
 """
-
-PRODUCT_KNOWLEDGE = {
-    "Slim Day": {
-        "name": "Slim Day",
-        "category": "Weight management supplement",
-        "price": 49.0,
-        "currency": "TND",
-        "old_price": None,
-        "offer_active": False,
-        "offer_title": None,
-        "offer_description": None,
-        "pack_size": "30 capsules",
-        "description": (
-            "Slim Day is a dietary supplement designed to support weight control "
-            "and fat metabolism during the day."
-        ),
-        "benefits": [
-            "supports natural weight management",
-            "helps reduce fat accumulation",
-            "supports fat burning and metabolism",
-            "helps regulate appetite and reduce sugar cravings",
-            "supports digestion and liver function",
-            "helps maintain balanced blood sugar levels",
-        ],
-        "ingredients": [
-            "Morosil red orange extract: 400 mg",
-            "Green tea leaf extract: 120 mg",
-            "Artichoke leaf extract: 120 mg",
-            "Guarana seed extract (20% natural caffeine): 80 mg",
-            "Zinc: 1.5 mg",
-            "Chromium: 6 micrograms",
-        ],
-        "usage": (
-            "Take 2 capsules daily with a large glass of water, preferably in the morning or during breakfast."
-        ),
-        "precautions": [
-            "Dietary supplement, not a medicine",
-            "For adults only",
-            "Use in the morning",
-            "Not recommended for pregnant or breastfeeding women",
-            "Not recommended for people sensitive to caffeine",
-            "If you have a medical condition or take medication, consult a doctor or pharmacist",
-            "Do not exceed the recommended daily dose",
-            "Keep out of reach of children",
-        ],
-    },
-
-    "Slim Night": {
-        "name": "Slim Night",
-        "category": "Night support supplement",
-        "price": 49.0,
-        "currency": "TND",
-        "old_price": None,
-        "offer_active": False,
-        "offer_title": None,
-        "offer_description": None,
-        "pack_size": "30 capsules",
-        "description": (
-            "Slim Night is a dietary supplement designed to support fat metabolism during sleep "
-            "and improve sleep quality."
-        ),
-        "benefits": [
-            "supports fat metabolism during sleep",
-            "helps improve sleep quality and deep sleep",
-            "promotes relaxation and calming of the nervous system",
-            "may help reduce night cravings",
-            "supports muscle recovery during the night",
-            "supports hormonal balance related to sleep",
-        ],
-        "ingredients": [
-            "Ashwagandha KSM-66: 200 mg",
-            "GABA: 100 mg",
-            "Chamomile extract: 80 mg",
-            "Passionflower extract: 80 mg",
-            "Valerian extract: 80 mg",
-            "L-carnitine (Carnipure): 110 mg",
-            "L-tryptophan: 35 mg",
-            "Melatonin: 1 mg",
-        ],
-        "usage": (
-            "Take 2 capsules in the evening with a glass of water, 30 minutes before sleep."
-        ),
-        "precautions": [
-            "Dietary supplement, not a medicine",
-            "For adults only",
-            "Not recommended for pregnant or breastfeeding women",
-            "If you have a medical condition or take medication, consult a doctor or pharmacist",
-            "Do not exceed the recommended daily dose",
-            "Keep out of reach of children",
-        ],
-    },
-
-    "Slim Pack": {
-        "name": "Slim Pack",
-        "category": "Weight management pack",
-        "price": 75.0,
-        "currency": "TND",
-        "old_price": 98.0,
-        "offer_active": True,
-        "offer_title": "Pack Offer",
-        "offer_description": "Slim Day + Slim Night at a reduced bundle price.",
-        "pack_size": "2 products",
-        "description": (
-            "Slim Pack combines Slim Day and Slim Night in a complete daytime and nighttime weight-management routine."
-        ),
-        "benefits": [
-            "combines daytime and nighttime support",
-            "supports weight management throughout the day",
-            "pairs metabolism and appetite support with nighttime recovery and sleep support",
-        ],
-        "ingredients": [
-            "Includes Slim Day",
-            "Includes Slim Night",
-        ],
-        "usage": (
-            "Use Slim Day in the morning and Slim Night in the evening according to the instructions of each product."
-        ),
-        "precautions": [
-            "Use each product according to its own instructions and precautions",
-            "Dietary supplements, not medicines",
-            "Do not exceed recommended doses",
-        ],
-    },
-
-    "Colon Detox": {
-        "name": "Colon Detox",
-        "category": "Digestive supplement",
-        "price": 49.0,
-        "currency": "TND",
-        "old_price": 69,
-        "offer_active": False,
-        "offer_title": None,
-        "offer_description": None,
-        "pack_size": "30 capsules",
-        "description": (
-            "Colon Detox is a natural digestive support product designed to improve digestion, "
-            "reduce bloating and gas, support bowel regularity, and help intestinal comfort."
-        ),
-        "benefits": [
-            "supports digestion",
-            "helps reduce bloating and gas",
-            "supports natural relief of constipation",
-            "supports intestinal regularity",
-            "supports gut health and digestive comfort",
-        ],
-        "ingredients": [
-            "Activated charcoal: 125 mg",
-            "Senna: 100 mg",
-            "Anise: 30 mg",
-            "Fennel: 20 mg",
-            "Rhubarb: 20 mg",
-            "Prebiotic: 50 mg",
-        ],
-        "usage": (
-            "Take 1 to 2 capsules with water. Follow the recommended dose on the product."
-        ),
-        "precautions": [
-            "Dietary supplement, not a medicine",
-            "Do not exceed the recommended daily dose",
-            "Consult a doctor or pharmacist if needed",
-            "Keep out of reach of children",
-        ],
-    },
-
-    "Liver Detox": {
-        "name": "Liver Detox",
-        "category": "Detox supplement",
-        "price": 49.0,
-        "currency": "TND",
-        "old_price": 69.0,
-        "offer_active": False,
-        "offer_title": None,
-        "offer_description": None,
-        "pack_size": "30 capsules",
-        "description": (
-            "Liver Detox is a dietary supplement developed to support liver function, natural detoxification, and digestion."
-        ),
-        "benefits": [
-            "supports liver detoxification",
-            "supports digestion",
-            "helps support liver and kidney elimination functions",
-            "supports bile production and digestive comfort",
-            "supports liver protection and regeneration",
-        ],
-        "ingredients": [
-            "Artichoke dry extract: 180 mg",
-            "Milk thistle / Silymarin 80%: 125 mg",
-            "Dandelion extract: 125 mg",
-            "Desmodium: 70 mg",
-        ],
-        "usage": (
-            "Take 2 capsules daily, preferably in the morning on an empty stomach or before meals."
-        ),
-        "precautions": [
-            "Dietary supplement, not a medicine",
-            "Do not exceed the recommended daily dose",
-            "Consult a doctor or pharmacist if needed",
-            "Keep out of reach of children",
-        ],
-    },
-
-    "Blood Detox": {
-        "name": "Blood Detox",
-        "category": "Circulation and heart support supplement",
-        "price": 92.0,
-        "currency": "TND",
-        "old_price": None,
-        "offer_active": False,
-        "offer_title": None,
-        "offer_description": None,
-        "pack_size": "30 capsules",
-        "description": (
-            "Blood Detox is a dietary supplement designed to support heart health, blood circulation, "
-            "and the elimination of toxins related to oxidative stress and daily strain."
-        ),
-        "benefits": [
-            "supports heart health and natural cardiovascular function",
-            "helps improve blood circulation",
-            "helps reduce oxidative stress",
-            "supports blood pressure balance and mineral balance",
-            "supports cellular energy and heart muscle function",
-            "helps the body eliminate toxins linked to daily stress",
-        ],
-        "ingredients": [
-            "Vitamin D3: 20 mg (as shown on provided packaging)",
-            "Magnesium: 50 mg",
-            "Potassium: 50 mg",
-            "Chloride: 46 mg",
-            "Olive leaf: 150 mg",
-            "Garlic extract: 150 mg",
-            "Curcuma 95% curcumin: 100 mg",
-            "Q10: 20 mg",
-            "Piperine: 15 mg",
-            "Berry extract: 80 mg",
-        ],
-        "usage": (
-            "Take 1 capsule daily after meals. Continuous use for 30 days is recommended for best results."
-        ),
-        "precautions": [
-            "Dietary supplement, not a medicine",
-            "Keep out of reach of children",
-            "Not recommended for pregnant or breastfeeding women except with medical advice",
-            "If you have a chronic illness or take medication, consult a specialist before use",
-        ],
-    },
-}
-
-BUNDLE_OFFERS = [
-    {
-        "bundle_name": "Liver Detox + Colon Detox",
-        "products": ["Liver Detox", "Colon Detox"],
-        "offer_active": True,
-        "old_price": 99.0,
-        "new_price": 69.0,
-        "currency": "TND",
-        "delivery_fee": 6.0,
-        "title": "عرض ديتوكس",
-        "description": "ليفير ديتوكس + كولون ديتوكس بسعر 69 د.ت عوض 99 د.ت"
-    },
-    {
-        "bundle_name": "Slim Day + Slim Night",
-        "products": ["Slim Day", "Slim Night"],
-        "offer_active": True,
-        "old_price": 98.0,
-        "new_price": 75.0,
-        "currency": "TND",
-        "delivery_fee": 6.0,
-        "title": "عرض Slim Pack",
-        "description": "Slim Day + Slim Night بسعر bundle أقل"
+def get_product_knowledge_dict():
+    products = get_all_products()
+    return {
+        product["name"]: product
+        for product in products
+        if product.get("name")
     }
-]
 
-QUANTITY_OFFERS = {
-    "Liver Detox": [
-        {
-            "quantity": 1,
-            "old_price": 59.0,
-            "new_price": 49.0,
-            "currency": "TND",
-            "discount_percent": 17,
-            "delivery_fee": 6.0,
-            "delivery_text": "التوصيل 6 د.ت",
-            "title": "اشترِ علبة واحدة (30 كبسولة)"
-        },
-        {
-            "quantity": 2,
-            "old_price": 120.0,
-            "new_price": 69.0,
-            "currency": "TND",
-            "discount_percent": 43,
-            "delivery_fee": 6.0,
-            "delivery_text": "التوصيل 6 د.ت",
-            "title": "اشترِ علبتين إثنين (60 كبسولة)"
-        },
-        {
-            "quantity": 3,
-            "old_price": 180.0,
-            "new_price": 89.0,
-            "currency": "TND",
-            "discount_percent": 51,
-            "delivery_fee": 0.0,
-            "delivery_text": "التوصيل مجاني",
-            "title": "اشترِ ثلاثة علب (90 كبسولة)"
-        }
-    ],
 
-    "Colon Detox": [
-        {
-            "quantity": 1,
-            "old_price": 59.0,
-            "new_price": 49.0,
-            "currency": "TND",
-            "discount_percent": 17,
-            "delivery_fee": 6.0,
-            "delivery_text": "التوصيل 6 د.ت",
-            "title": "اشترِ علبة واحدة (30 كبسولة)"
-        },
-        {
-            "quantity": 2,
-            "old_price": 120.0,
-            "new_price": 69.0,
-            "currency": "TND",
-            "discount_percent": 43,
-            "delivery_fee": 6.0,
-            "delivery_text": "التوصيل 6 د.ت",
-            "title": "اشترِ علبتين إثنين (60 كبسولة)"
-        },
-        {
-            "quantity": 3,
-            "old_price": 180.0,
-            "new_price": 89.0,
-            "currency": "TND",
-            "discount_percent": 51,
-            "delivery_fee": 0.0,
-            "delivery_text": "التوصيل مجاني",
-            "title": "اشترِ ثلاثة علب (90 كبسولة)"
-        }
-    ]
-}
 
 
 def build_user_context(merged_profile: dict | None) -> str:
@@ -492,60 +172,696 @@ Daily check-in memory:
 """
 
 
-def detect_product(question: str) -> str | None:
-    q = question.lower()
-
-    if "slim day" in q:
-        return "Slim Day"
-    if any(x in q for x in [
-        "colon detox", "colon", "constipation", "digest", "digestion", "li ynadhef lcolon", "الي ينظف القولون", "gaz", "nfekh"
-        "kerch", "bloating", "نفخة", "إمساك", "هضم", "كرش"
-    ]):
-        return "Colon Detox"
-    if "slim night" in q:
-        return "Slim Night"
-    if any(x in q for x in [
-        "semna", "kerch", "nodh3ef", "سمنة", "graisse","li ynaqes lwazn"
-        "تخسيس", "نقص وزن", "naqs", "wazn", "نضعف", "كرش"
-    ]):
-        return "Slim Pack"
+def normalize_text(value: str | None) -> str:
+    return " ".join(
+        str(value or "").lower().strip().split()
+    )
 
 
-    if any(x in q for x in [
-        "liver detox", "liver", "kebda", "كبد", "detox", "سموم"
-    ]):
-        return "Liver Detox"
+def detect_product(
+    question: str,
+    product_db: dict | None = None,
+) -> str | None:
+    """
+    Detect only a product explicitly mentioned by name.
 
-    if any(x in q for x in [
-        "blood detox", "blood", "circulation", "heart", "cardio", "دم", "قلب", "الي ينظف الدم", "li ysafi dam", "anxiete"
-    ]):
-        return "Blood Detox"
+    Generic needs such as weight loss, appetite, digestion,
+    sugar balance, etc. must not count as an explicit product.
+    """
+    q = normalize_text(question)
+
+    product_db = (
+        product_db
+        or get_product_knowledge_dict()
+    )
+
+    for product_name in product_db:
+        normalized_name = normalize_text(product_name)
+
+        if normalized_name and normalized_name in q:
+            return product_name
 
     return None
 
-def detect_products(question: str) -> list:
-    q = question.lower()
-    products = []
+def detect_products(
+    question: str,
+    product_db: dict | None = None,
+) -> list[str]:
+    q = normalize_text(question)
 
-    if "colon detox" in q or "colon" in q:
-        products.append("Colon Detox")
+    product_db = (
+        product_db
+        or get_product_knowledge_dict()
+    )
 
-    if "liver detox" in q or "liver" in q or "kebda" in q or "كبد" in q:
-        products.append("Liver Detox")
+    detected = []
 
-    if "blood detox" in q or "blood" in q:
-        products.append("Blood Detox")
+    product_names = sorted(
+        product_db.keys(),
+        key=len,
+        reverse=True,
+    )
 
-    if "slim pack" in q:
-        products.append("Slim Pack")
+    for product_name in product_names:
+        normalized_name = normalize_text(
+            product_name
+        )
 
-    if "slim day" in q:
-        products.append("Slim Day")
+        if normalized_name and normalized_name in q:
+            detected.append(product_name)
 
-    if "slim night" in q:
-        products.append("Slim Night")
+    return list(dict.fromkeys(detected))
 
-    return products
+
+# FIX: detect_product/detect_products exigent soit le nom exact du
+# produit, soit un tag explicite dans product_db -- un terme de
+# categorie generique ("produit detox", "produit minceur") ne matche
+# aucun des deux car DEUX produits ou plus partagent ce mot (Liver
+# Detox et Colon Detox contiennent tous les deux "Detox"), donc aucun
+# match n'est unique et detect_product renvoie None. Ce helper detecte
+# ces cas d'ambiguite pour permettre au chatbot de demander une
+# precision au lieu de repondre dans le vide.
+CATEGORY_KEYWORDS: dict[str, set[str]] = {
+    # ==========================================================
+    # GENERAL DETOX — ambiguous category
+    # ==========================================================
+    "detox": {
+        "Colon Detox",
+        "Liver Detox",
+        "Blood Detox",
+        "Lung Detox",
+    },
+    "détox": {
+        "Colon Detox",
+        "Liver Detox",
+        "Blood Detox",
+        "Lung Detox",
+    },
+    "detoxification": {
+        "Colon Detox",
+        "Liver Detox",
+        "Blood Detox",
+        "Lung Detox",
+    },
+    "produit detox": {
+        "Colon Detox",
+        "Liver Detox",
+        "Blood Detox",
+        "Lung Detox",
+    },
+    "cure detox": {
+        "Colon Detox",
+        "Liver Detox",
+        "Blood Detox",
+        "Lung Detox",
+    },
+    "تنظيف الجسم": {
+        "Colon Detox",
+        "Liver Detox",
+        "Blood Detox",
+        "Lung Detox",
+    },
+    "تنقية الجسم": {
+        "Colon Detox",
+        "Liver Detox",
+        "Blood Detox",
+        "Lung Detox",
+    },
+    "التخلص من السموم": {
+        "Colon Detox",
+        "Liver Detox",
+        "Blood Detox",
+        "Lung Detox",
+    },
+    "ديتوكس": {
+        "Colon Detox",
+        "Liver Detox",
+        "Blood Detox",
+        "Lung Detox",
+    },
+    "نحب نعمل ديتوكس": {
+        "Colon Detox",
+        "Liver Detox",
+        "Blood Detox",
+        "Lung Detox",
+    },
+    "nheb naamel detox": {
+        "Colon Detox",
+        "Liver Detox",
+        "Blood Detox",
+        "Lung Detox",
+    },
+    "tandhif el jism": {
+        "Colon Detox",
+        "Liver Detox",
+        "Blood Detox",
+        "Lung Detox",
+    },
+
+    # ==========================================================
+    # COLON DETOX
+    # ==========================================================
+    "colon": {"Colon Detox"},
+    "côlon": {"Colon Detox"},
+    "colon detox": {"Colon Detox"},
+    "détox du côlon": {"Colon Detox"},
+    "nettoyage du côlon": {"Colon Detox"},
+    "nettoyer le côlon": {"Colon Detox"},
+    "santé du côlon": {"Colon Detox"},
+    "confort du côlon": {"Colon Detox"},
+    "digestion difficile": {"Colon Detox"},
+    "mauvaise digestion": {"Colon Detox"},
+    "inconfort digestif": {"Colon Detox"},
+    "troubles digestifs": {"Colon Detox"},
+    "ballonnement": {"Colon Detox"},
+    "ballonnements": {"Colon Detox"},
+    "ventre gonflé": {"Colon Detox"},
+    "gaz": {"Colon Detox"},
+    "gaz intestinaux": {"Colon Detox"},
+    "flatulence": {"Colon Detox"},
+    "flatulences": {"Colon Detox"},
+    "lourdeur digestive": {"Colon Detox"},
+    "transit lent": {"Colon Detox", "Psyllium"},
+    "constipation": {"Colon Detox", "Psyllium"},
+
+    "القولون": {"Colon Detox"},
+    "تنظيف القولون": {"Colon Detox"},
+    "تطهير القولون": {"Colon Detox"},
+    "صحة القولون": {"Colon Detox"},
+    "مشاكل القولون": {"Colon Detox"},
+    "الهضم": {"Colon Detox"},
+    "سوء الهضم": {"Colon Detox"},
+    "عسر الهضم": {"Colon Detox"},
+    "مشاكل الهضم": {"Colon Detox"},
+    "انتفاخ": {"Colon Detox"},
+    "انتفاخ البطن": {"Colon Detox"},
+    "نفخة": {"Colon Detox"},
+    "غازات": {"Colon Detox"},
+    "غازات البطن": {"Colon Detox"},
+    "ثقل في المعدة": {"Colon Detox"},
+    "معدة ثقيلة": {"Colon Detox"},
+
+    "kerch": {"Colon Detox"},
+    "kerchi": {"Colon Detox"},
+    "nfekh": {"Colon Detox"},
+    "nefkh": {"Colon Detox"},
+    "naf5a": {"Colon Detox"},
+    "gazet": {"Colon Detox"},
+    "ghazet": {"Colon Detox"},
+    "m3adti": {"Colon Detox"},
+    "maadti": {"Colon Detox"},
+    "m3adti th9ila": {"Colon Detox"},
+    "hadhma": {"Colon Detox"},
+    "hadma": {"Colon Detox"},
+    "mochklet hadhm": {"Colon Detox"},
+    "li ynadhef lcolon": {"Colon Detox"},
+    "li ynadhaf lcolon": {"Colon Detox"},
+    "nadhafli lcolon": {"Colon Detox"},
+    "ynadhef el colon": {"Colon Detox"},
+
+    # ==========================================================
+    # PSYLLIUM
+    # ==========================================================
+    "psyllium": {"Psyllium"},
+    "psilium": {"Psyllium"},
+    "ispaghul": {"Psyllium"},
+    "tégument de psyllium": {"Psyllium"},
+    "fibre": {"Psyllium"},
+    "fibres": {"Psyllium"},
+    "fibres alimentaires": {"Psyllium"},
+    "complément de fibres": {"Psyllium"},
+    "manque de fibres": {"Psyllium"},
+    "transit intestinal": {"Psyllium"},
+    "régularité intestinale": {"Psyllium"},
+    "aller aux toilettes": {"Psyllium"},
+    "selles difficiles": {"Psyllium"},
+    "constipation occasionnelle": {"Psyllium"},
+    "satiété": {"Psyllium"},
+    "coupe faim naturel": {"Psyllium"},
+    "contrôle de l'appétit": {"Psyllium"},
+    "réduire l'appétit": {"Psyllium"},
+    "manger moins": {"Psyllium"},
+
+    "السيليوم": {"Psyllium"},
+    "بسيليوم": {"Psyllium"},
+    "قشور السيليوم": {"Psyllium"},
+    "ألياف": {"Psyllium"},
+    "الألياف": {"Psyllium"},
+    "نقص الألياف": {"Psyllium"},
+    "تنظيم الأمعاء": {"Psyllium"},
+    "حركة الأمعاء": {"Psyllium"},
+    "تسهيل الإخراج": {"Psyllium"},
+    "صعوبة الإخراج": {"Psyllium"},
+    "إمساك": {"Psyllium", "Colon Detox"},
+    "امساك": {"Psyllium", "Colon Detox"},
+    "الشبع": {"Psyllium"},
+    "زيادة الشبع": {"Psyllium"},
+    "تقليل الشهية": {"Psyllium"},
+    "التحكم في الشهية": {"Psyllium"},
+
+    "imsek": {"Psyllium", "Colon Detox"},
+    "emsek": {"Psyllium", "Colon Detox"},
+    "emsak": {"Psyllium", "Colon Detox"},
+    "ma nemchich lel toilette": {"Psyllium"},
+    "s3ib nemchi lel toilette": {"Psyllium"},
+    "s3ib nokhrej": {"Psyllium"},
+    "nheb fibre": {"Psyllium"},
+    "nheb nechba3": {"Psyllium"},
+    "ma nechba3ch": {"Psyllium"},
+    "chahiya kbira": {"Psyllium"},
+    "yn9as chahiya": {"Psyllium"},
+
+    # ==========================================================
+    # LIVER DETOX
+    # ==========================================================
+    "liver detox": {"Liver Detox"},
+    "liver": {"Liver Detox"},
+    "foie": {"Liver Detox"},
+    "détox du foie": {"Liver Detox"},
+    "nettoyage du foie": {"Liver Detox"},
+    "nettoyer le foie": {"Liver Detox"},
+    "santé du foie": {"Liver Detox"},
+    "soutien du foie": {"Liver Detox"},
+    "fonction hépatique": {"Liver Detox"},
+    "fonctionnement du foie": {"Liver Detox"},
+    "hépatique": {"Liver Detox"},
+    "bile": {"Liver Detox"},
+    "sécrétion biliaire": {"Liver Detox"},
+
+    "الكبد": {"Liver Detox"},
+    "تنظيف الكبد": {"Liver Detox"},
+    "ديتوكس الكبد": {"Liver Detox"},
+    "تطهير الكبد": {"Liver Detox"},
+    "صحة الكبد": {"Liver Detox"},
+    "دعم الكبد": {"Liver Detox"},
+    "وظائف الكبد": {"Liver Detox"},
+    "الصفراء": {"Liver Detox"},
+    "العصارة الصفراوية": {"Liver Detox"},
+
+    "kebda": {"Liver Detox"},
+    "kabda": {"Liver Detox"},
+    "kebdi": {"Liver Detox"},
+    "nadhaf el kebda": {"Liver Detox"},
+    "ynadhef lkebda": {"Liver Detox"},
+    "detox kebda": {"Liver Detox"},
+    "produit lel kebda": {"Liver Detox"},
+    "haja lel kebda": {"Liver Detox"},
+
+    # ==========================================================
+    # SLIM PACK
+    # ==========================================================
+    "slim pack": {"Slim Pack"},
+    "slim day": {"Slim Pack"},
+    "slim night": {"Slim Pack"},
+    "pack minceur": {"Slim Pack"},
+    "produit minceur": {"Slim Pack"},
+    "complément minceur": {"Slim Pack"},
+    "minceur": {"Slim Pack"},
+    "amaigrissement": {"Slim Pack"},
+    "perte de poids": {"Slim Pack"},
+    "perdre du poids": {"Slim Pack"},
+    "réduction du poids": {"Slim Pack"},
+    "gestion du poids": {"Slim Pack"},
+    "contrôle du poids": {"Slim Pack"},
+    "surpoids": {"Slim Pack"},
+    "excès de poids": {"Slim Pack"},
+    "brûleur de graisse": {"Slim Pack"},
+    "bruleur de graisse": {"Slim Pack"},
+    "graisse corporelle": {"Slim Pack"},
+    "graisse abdominale": {"Slim Pack"},
+    "métabolisme": {"Slim Pack"},
+    "activer le métabolisme": {"Slim Pack"},
+    "appétit": {"Slim Pack", "Psyllium"},
+    "réduire la faim": {"Slim Pack", "Psyllium"},
+
+    "التنحيف": {"Slim Pack"},
+    "تخسيس": {"Slim Pack"},
+    "إنقاص الوزن": {"Slim Pack"},
+    "نقص الوزن": {"Slim Pack"},
+    "فقدان الوزن": {"Slim Pack"},
+    "التحكم في الوزن": {"Slim Pack"},
+    "الوزن الزائد": {"Slim Pack"},
+    "الوزن الزائد": {"Slim Pack"},
+    "السمنة": {"Slim Pack"},
+    "حرق الدهون": {"Slim Pack"},
+    "دهون البطن": {"Slim Pack"},
+    "الشحوم": {"Slim Pack"},
+    "الكرش": {"Slim Pack"},
+    "الأيض": {"Slim Pack"},
+    "رفع معدل الحرق": {"Slim Pack"},
+    "تقليل الجوع": {"Slim Pack", "Psyllium"},
+
+    "na9es wazn": {"Slim Pack"},
+    "naqs wazn": {"Slim Pack"},
+    "n9as lwazn": {"Slim Pack"},
+    "nheb nna9es": {"Slim Pack"},
+    "nheb nodh3ef": {"Slim Pack"},
+    "nheb nodh3of": {"Slim Pack"},
+    "nheb ndha3ef": {"Slim Pack"},
+    "ydha3ef": {"Slim Pack"},
+    "li ydha3ef": {"Slim Pack"},
+    "li yna9es lwazn": {"Slim Pack"},
+    "ynaqes lwazn": {"Slim Pack"},
+    "yn9as lwazn": {"Slim Pack"},
+    "takhssis": {"Slim Pack"},
+    "tan7if": {"Slim Pack"},
+    "semna": {"Slim Pack"},
+    "smen": {"Slim Pack"},
+    "graisse": {"Slim Pack"},
+    "ch7am": {"Slim Pack"},
+    "kerch kbira": {"Slim Pack"},
+    "metabolisme": {"Slim Pack"},
+    "har9 edhoun": {"Slim Pack"},
+
+    # ==========================================================
+    # BLOOD DETOX
+    # ==========================================================
+    "blood detox": {"Blood Detox"},
+    "sang": {"Blood Detox"},
+    "détox du sang": {"Blood Detox"},
+    "nettoyer le sang": {"Blood Detox"},
+    "purifier le sang": {"Blood Detox"},
+    "purification du sang": {"Blood Detox"},
+    "circulation": {"Blood Detox"},
+    "circulation sanguine": {"Blood Detox"},
+    "mauvaise circulation": {"Blood Detox"},
+    "santé cardiovasculaire": {"Blood Detox"},
+    "santé du cœur": {"Blood Detox"},
+    "coeur": {"Blood Detox"},
+    "cœur": {"Blood Detox"},
+    "cardiovasculaire": {"Blood Detox"},
+
+    "الدم": {"Blood Detox"},
+    "تنقية الدم": {"Blood Detox"},
+    "تنظيف الدم": {"Blood Detox"},
+    "تطهير الدم": {"Blood Detox"},
+    "الدورة الدموية": {"Blood Detox"},
+    "ضعف الدورة الدموية": {"Blood Detox"},
+    "صحة القلب": {"Blood Detox"},
+    "القلب": {"Blood Detox"},
+    "دعم القلب": {"Blood Detox"},
+    "الأوعية الدموية": {"Blood Detox"},
+
+    "dam": {"Blood Detox"},
+    "damm": {"Blood Detox"},
+    "ysafi dam": {"Blood Detox"},
+    "li ysafi dam": {"Blood Detox"},
+    "ynadhef dam": {"Blood Detox"},
+    "dawra damawiya": {"Blood Detox"},
+    "dawran eddam": {"Blood Detox"},
+    "circulation dam": {"Blood Detox"},
+    "9alb": {"Blood Detox"},
+    "qalb": {"Blood Detox"},
+    "produit lel 9alb": {"Blood Detox"},
+
+    # ==========================================================
+    # LUNG DETOX
+    # ==========================================================
+    "lung detox": {"Lung Detox"},
+    "poumon": {"Lung Detox"},
+    "poumons": {"Lung Detox"},
+    "détox des poumons": {"Lung Detox"},
+    "nettoyer les poumons": {"Lung Detox"},
+    "santé pulmonaire": {"Lung Detox"},
+    "santé respiratoire": {"Lung Detox"},
+    "confort respiratoire": {"Lung Detox"},
+    "respiration": {"Lung Detox"},
+    "respirer": {"Lung Detox"},
+    "difficulté à respirer": {"Lung Detox"},
+    "fumeur": {"Lung Detox"},
+    "fumeuse": {"Lung Detox"},
+    "tabac": {"Lung Detox"},
+    "cigarette": {"Lung Detox"},
+    "réduire le tabac": {"Lung Detox"},
+    "arrêter de fumer": {"Lung Detox"},
+    "réduction du tabagisme": {"Lung Detox"},
+    "rweri": {"Lung Detox"},
+
+    "الرئة": {"Lung Detox"},
+    "الرئتين": {"Lung Detox"},
+    "تنظيف الرئة": {"Lung Detox"},
+    "تنظيف الرئتين": {"Lung Detox"},
+    "صحة الرئة": {"Lung Detox"},
+    "الجهاز التنفسي": {"Lung Detox"},
+    "التنفس": {"Lung Detox"},
+    "صعوبة التنفس": {"Lung Detox"},
+    "ضيق التنفس": {"Lung Detox"},
+    "التدخين": {"Lung Detox"},
+    "مدخن": {"Lung Detox"},
+    "مدخنة": {"Lung Detox"},
+    "السجائر": {"Lung Detox"},
+    "تقليل التدخين": {"Lung Detox"},
+    "الإقلاع عن التدخين": {"Lung Detox"},
+
+    "riya": {"Lung Detox"},
+    "rya": {"Lung Detox"},
+    "raya": {"Lung Detox"},
+    "poumonet": {"Lung Detox"},
+    "tanaffos": {"Lung Detox"},
+    "nafas": {"Lung Detox"},
+    "ma najamch netnaffes": {"Lung Detox"},
+    "netnaffes bs3ouba": {"Lung Detox"},
+    "dokhan": {"Lung Detox"},
+    "doukhan": {"Lung Detox"},
+    "cigarette": {"Lung Detox"},
+    "cigaro": {"Lung Detox"},
+    "nheb nna9es dokhan": {"Lung Detox"},
+    "nheb nbatal dokhan": {"Lung Detox"},
+    "nheb nbatel dokhan": {"Lung Detox"},
+
+    # ==========================================================
+    # BERBERINE & CEYLON CINNAMON
+    # ==========================================================
+    "berberine": {"Berberine & Ceylon Cinnamon"},
+    "berbérine": {"Berberine & Ceylon Cinnamon"},
+    "ceylon cinnamon": {"Berberine & Ceylon Cinnamon"},
+    "cannelle de ceylan": {"Berberine & Ceylon Cinnamon"},
+    "cannelle": {"Berberine & Ceylon Cinnamon"},
+    "équilibre glycémique": {"Berberine & Ceylon Cinnamon"},
+    "glycémie": {"Berberine & Ceylon Cinnamon"},
+    "taux de sucre": {"Berberine & Ceylon Cinnamon"},
+    "sucre dans le sang": {"Berberine & Ceylon Cinnamon"},
+    "glucose": {"Berberine & Ceylon Cinnamon"},
+    "insuline": {"Berberine & Ceylon Cinnamon"},
+    "sensibilité à l'insuline": {"Berberine & Ceylon Cinnamon"},
+    "résistance à l'insuline": {"Berberine & Ceylon Cinnamon"},
+    "envie de sucre": {"Berberine & Ceylon Cinnamon"},
+    "envies de sucre": {"Berberine & Ceylon Cinnamon"},
+    "envie de sucré": {"Berberine & Ceylon Cinnamon"},
+    "fringale sucrée": {"Berberine & Ceylon Cinnamon"},
+    "diabète": {"Berberine & Ceylon Cinnamon"},
+    "diabétique": {"Berberine & Ceylon Cinnamon"},
+
+    "البربرين": {"Berberine & Ceylon Cinnamon"},
+    "بربرين": {"Berberine & Ceylon Cinnamon"},
+    "قرفة سيلان": {"Berberine & Ceylon Cinnamon"},
+    "القرفة": {"Berberine & Ceylon Cinnamon"},
+    "توازن السكر": {"Berberine & Ceylon Cinnamon"},
+    "تنظيم السكر": {"Berberine & Ceylon Cinnamon"},
+    "سكر الدم": {"Berberine & Ceylon Cinnamon"},
+    "مستوى السكر": {"Berberine & Ceylon Cinnamon"},
+    "الجلوكوز": {"Berberine & Ceylon Cinnamon"},
+    "الإنسولين": {"Berberine & Ceylon Cinnamon"},
+    "مقاومة الإنسولين": {"Berberine & Ceylon Cinnamon"},
+    "حساسية الإنسولين": {"Berberine & Ceylon Cinnamon"},
+    "الرغبة في السكر": {"Berberine & Ceylon Cinnamon"},
+    "الرغبة في الحلويات": {"Berberine & Ceylon Cinnamon"},
+    "اشتهاء الحلويات": {"Berberine & Ceylon Cinnamon"},
+    "السكري": {"Berberine & Ceylon Cinnamon"},
+
+    "qerfa": {"Berberine & Ceylon Cinnamon"},
+    "9erfa": {"Berberine & Ceylon Cinnamon"},
+    "korfa": {"Berberine & Ceylon Cinnamon"},
+    "sokker": {"Berberine & Ceylon Cinnamon"},
+    "souker": {"Berberine & Ceylon Cinnamon"},
+    "سكر": {"Berberine & Ceylon Cinnamon"},
+    "sokker fel dam": {"Berberine & Ceylon Cinnamon"},
+    "taux sokker": {"Berberine & Ceylon Cinnamon"},
+    "insuline": {"Berberine & Ceylon Cinnamon"},
+    "mo9awmet insuline": {"Berberine & Ceylon Cinnamon"},
+    "nchahi lel 7low": {"Berberine & Ceylon Cinnamon"},
+    "nchahi lel hlou": {"Berberine & Ceylon Cinnamon"},
+    "nheb l7low": {"Berberine & Ceylon Cinnamon"},
+    "chahiya lel sokker": {"Berberine & Ceylon Cinnamon"},
+}
+
+def resolve_products_by_category(
+    question: str,
+    product_db: dict | None = None,
+) -> tuple[list[str], list[list[str]]]:
+    """
+    Returns:
+    - resolved_products: products coming from clear categories
+    - ambiguous_groups: categories that correspond to several products
+    """
+    product_db = (
+        product_db
+        or get_product_knowledge_dict()
+    )
+
+    q = normalize_text(question)
+
+    resolved_products = []
+    ambiguous_groups = []
+
+    sorted_keywords = sorted(
+        CATEGORY_KEYWORDS,
+        key=len,
+        reverse=True,
+    )
+
+    matched_spans = []
+
+    for keyword in sorted_keywords:
+        normalized_keyword = normalize_text(keyword)
+
+        if not normalized_keyword:
+            continue
+
+        if normalized_keyword not in q:
+            continue
+
+        # Avoid counting a short keyword already contained
+        # inside a more specific matched expression.
+        if any(
+            normalized_keyword in previous_keyword
+            for previous_keyword in matched_spans
+        ):
+            continue
+
+        matched_spans.append(normalized_keyword)
+
+        existing_products = [
+            product_name
+            for product_name in CATEGORY_KEYWORDS[keyword]
+            if product_name in product_db
+        ]
+
+        if len(existing_products) == 1:
+            resolved_products.extend(
+                existing_products
+            )
+
+        elif len(existing_products) > 1:
+            ambiguous_groups.append(
+                existing_products
+            )
+
+    return (
+        list(dict.fromkeys(resolved_products)),
+        ambiguous_groups,
+    )
+
+def match_products_by_category(
+    question: str,
+    product_db: dict | None = None,
+) -> list[str]:
+    product_db = product_db or get_product_knowledge_dict()
+    q = normalize_text(question)
+
+    matched_products = set()
+
+    # Longer phrases first, so specific expressions are prioritized.
+    sorted_keywords = sorted(
+        CATEGORY_KEYWORDS,
+        key=len,
+        reverse=True,
+    )
+
+    for keyword in sorted_keywords:
+        normalized_keyword = normalize_text(keyword)
+
+        if normalized_keyword and normalized_keyword in q:
+            matched_products.update(
+                CATEGORY_KEYWORDS[keyword]
+            )
+
+    # Return only products that actually exist in Supabase/product_db.
+    return [
+        product_name
+        for product_name in product_db
+        if product_name in matched_products
+    ]
+
+
+
+def fuzzy_match_products_by_category(
+    question: str,
+    product_db: dict | None = None,
+    threshold: int = 88,
+) -> list[str]:
+    product_db = product_db or get_product_knowledge_dict()
+
+    q_words = normalize_text(question).split()
+    matched_products = set()
+
+    for keyword, products in CATEGORY_KEYWORDS.items():
+        keyword_words = normalize_text(keyword).split()
+
+        # Compare complete short expressions
+        if len(keyword_words) > 1:
+            score = fuzz.partial_ratio(
+                normalize_text(question),
+                normalize_text(keyword),
+            )
+
+            if score >= threshold:
+                matched_products.update(products)
+
+        # Compare individual words such as reya / riya
+        else:
+            for word in q_words:
+                score = fuzz.ratio(
+                    word,
+                    keyword_words[0],
+                )
+
+                if score >= threshold:
+                    matched_products.update(products)
+
+    return [
+        product_name
+        for product_name in product_db
+        if product_name in matched_products
+    ]
+
+def fuzzy_category_match(question, threshold=88):
+    q_words = normalize_text(question).split()
+
+    matched = set()
+
+    for keyword, products in CATEGORY_KEYWORDS.items():
+        for word in q_words:
+            if fuzz.ratio(word, keyword) >= threshold:
+                matched.update(products)
+
+    return list(matched)
+def build_disambiguation_answer(question: str, category_matches: list[str]) -> str:
+    language = detect_fallback_language(question)
+    names = ", ".join(category_matches)
+
+    templates = {
+        "ar": f"عندنا كذا منتج يلزم هالموضوع: {names}. شنية بالضبط تحب تعرف عليه؟",
+        "fr": f"Nous avons plusieurs produits qui correspondent : {names}. Lequel vous intéresse ?",
+        "en": f"We have a few products that match: {names}. Which one would you like to know about?",
+    }
+
+    return templates.get(language, templates["fr"])
+def get_last_category_matches_from_history(
+    chat_history: list | None,
+    product_db: dict | None = None,
+) -> list[str]:
+    if not chat_history:
+        return []
+
+    for msg in reversed(chat_history):
+        content = msg.get("content", "")
+        matches = match_products_by_category(content, product_db)
+        if matches:
+            return matches
+
+    return []
+
 
 def format_delivery_info_for_products(products: list, quantity_offers_db: dict, bundle_offers_db: list) -> str:
     if not products:
@@ -599,6 +915,258 @@ def format_delivery_info_for_products(products: list, quantity_offers_db: dict, 
             lines.append("- ما عنديش تفاصيل توصيل حسب الكمية لهذا المنتج وحدو.")
 
     return "\n".join(lines)
+def get_products_context(
+    detected_products,
+    product_db,
+):
+    products = []
+
+    for name in detected_products:
+        product = get_product_safely(
+            product_db,
+            name,
+        )
+
+        if product:
+            products.append(product)
+
+    return products
+
+def format_multi_product_prices(
+    products: list[str],
+    product_db: dict,
+    bundle_offers_db: list[dict],
+    language: str = "ar",
+) -> tuple[str, list[dict], list[dict]]:
+    product_prices = []
+
+    for product_name in products:
+        product = get_product_safely(
+            product_db,
+            product_name,
+        )
+
+        if not product:
+            continue
+
+        product_prices.append({
+            "product": product_name,
+            "price": product.get("price"),
+            "old_price": product.get("old_price"),
+            "currency": (
+                product.get("currency")
+                or "TND"
+            ),
+        })
+
+    requested_products = set(products)
+    matching_bundles = []
+
+    for bundle in bundle_offers_db:
+        bundle_products = set(
+            bundle.get("products") or []
+        )
+
+        # The bundle must contain all requested products
+        if (
+            requested_products
+            and requested_products.issubset(
+                bundle_products
+            )
+        ):
+            matching_bundles.append(bundle)
+
+    if language == "fr":
+        lines = []
+
+        for item in product_prices:
+            price = item.get("price")
+            old_price = item.get("old_price")
+            currency = item.get("currency")
+
+            if price is None:
+                lines.append(
+                    f"• Le prix de {item['product']} "
+                    f"n’est pas disponible actuellement."
+                )
+            elif old_price and old_price > price:
+                lines.append(
+                    f"• {item['product']} : "
+                    f"{price:g} {currency} "
+                    f"au lieu de {old_price:g} {currency}."
+                )
+            else:
+                lines.append(
+                    f"• {item['product']} : "
+                    f"{price:g} {currency}."
+                )
+
+        if matching_bundles:
+            lines.append(
+                "\nIls sont également disponibles ensemble :"
+            )
+
+            for bundle in matching_bundles:
+                title = (
+                    bundle.get("title")
+                    or bundle.get("name")
+                    or "Pack"
+                )
+                new_price = bundle.get("new_price")
+                old_price = bundle.get("old_price")
+                currency = (
+                    bundle.get("currency")
+                    or "TND"
+                )
+
+                if new_price is not None:
+                    if (
+                        old_price is not None
+                        and old_price > new_price
+                    ):
+                        lines.append(
+                            f"• {title} : "
+                            f"{new_price:g} {currency} "
+                            f"au lieu de "
+                            f"{old_price:g} {currency}."
+                        )
+                    else:
+                        lines.append(
+                            f"• {title} : "
+                            f"{new_price:g} {currency}."
+                        )
+
+        return (
+            "\n".join(lines),
+            product_prices,
+            matching_bundles,
+        )
+
+    if language == "en":
+        lines = []
+
+        for item in product_prices:
+            price = item.get("price")
+            old_price = item.get("old_price")
+            currency = item.get("currency")
+
+            if price is None:
+                lines.append(
+                    f"• The current price of "
+                    f"{item['product']} is unavailable."
+                )
+            elif old_price and old_price > price:
+                lines.append(
+                    f"• {item['product']}: "
+                    f"{price:g} {currency} instead of "
+                    f"{old_price:g} {currency}."
+                )
+            else:
+                lines.append(
+                    f"• {item['product']}: "
+                    f"{price:g} {currency}."
+                )
+
+        if matching_bundles:
+            lines.append(
+                "\nThey are also available together:"
+            )
+
+            for bundle in matching_bundles:
+                title = (
+                    bundle.get("title")
+                    or bundle.get("name")
+                    or "Bundle"
+                )
+                new_price = bundle.get("new_price")
+                old_price = bundle.get("old_price")
+                currency = (
+                    bundle.get("currency")
+                    or "TND"
+                )
+
+                if new_price is not None:
+                    if (
+                        old_price is not None
+                        and old_price > new_price
+                    ):
+                        lines.append(
+                            f"• {title}: "
+                            f"{new_price:g} {currency} "
+                            f"instead of "
+                            f"{old_price:g} {currency}."
+                        )
+                    else:
+                        lines.append(
+                            f"• {title}: "
+                            f"{new_price:g} {currency}."
+                        )
+
+        return (
+            "\n".join(lines),
+            product_prices,
+            matching_bundles,
+        )
+
+    # Arabic / Tunisian
+    lines = []
+
+    for item in product_prices:
+        price = item.get("price")
+        old_price = item.get("old_price")
+
+        if price is None:
+            lines.append(
+                f"• سعر {item['product']} "
+                f"موش متوفر حالياً."
+            )
+        elif old_price and old_price > price:
+            lines.append(
+                f"• {item['product']}: "
+                f"{price:g} دينار عوض "
+                f"{old_price:g} دينار."
+            )
+        else:
+            lines.append(
+                f"• {item['product']}: "
+                f"{price:g} دينار."
+            )
+
+    if matching_bundles:
+        lines.append(
+            "\nموجودين زادة مع بعضهم في عرض:"
+        )
+
+        for bundle in matching_bundles:
+            title = (
+                bundle.get("title")
+                or bundle.get("name")
+                or "باك"
+            )
+            new_price = bundle.get("new_price")
+            old_price = bundle.get("old_price")
+
+            if new_price is not None:
+                if (
+                    old_price is not None
+                    and old_price > new_price
+                ):
+                    lines.append(
+                        f"• {title}: "
+                        f"{new_price:g} دينار عوض "
+                        f"{old_price:g} دينار."
+                    )
+                else:
+                    lines.append(
+                        f"• {title}: "
+                        f"{new_price:g} دينار."
+                    )
+
+    return (
+        "\n".join(lines),
+        product_prices,
+        matching_bundles,
+    )
 
 def get_last_product_from_history(chat_history: list | None) -> str | None:
     if not chat_history:
@@ -633,8 +1201,77 @@ def is_implicit_reference(question: str) -> bool:
         "for how long",
     ]
     return any(k in q for k in keywords)
+def get_localized_field(
+    product: dict,
+    field: str,
+    language: str,
+):
+    supported_languages = {"ar", "fr", "en"}
 
+    if language not in supported_languages:
+        language = "en"
 
+    localized_value = product.get(
+        f"{field}_{language}"
+    )
+
+    if localized_value:
+        return localized_value
+
+    return (
+        product.get(f"{field}_en")
+        or product.get(field)
+        or []
+    )
+def format_product_field_for_many(
+    products,
+    field,
+    title,
+    language,
+):
+    sections = []
+    structured_info = []
+
+    for product in products:
+        product_name = product.get(
+            "name",
+            "Produit",
+        )
+
+        value = get_localized_field(
+            product,
+            field,
+            language,
+        )
+
+        if not value:
+            continue
+
+        if isinstance(value, list):
+            formatted_value = "\n".join(
+                f"- {item}"
+                for item in value
+            )
+        else:
+            formatted_value = str(value)
+
+        sections.append(
+            f"{title} {product_name}:\n"
+            f"{formatted_value}"
+        )
+
+        structured_info.append({
+            "product": product_name,
+            field: value,
+        })
+
+    answer = (
+        "\n\n------------------\n\n".join(
+            sections
+        )
+    )
+
+    return answer, structured_info
 def detect_intent(question: str) -> str:
     q = question.lower()
     product = detect_product(question)
@@ -652,12 +1289,7 @@ def detect_intent(question: str) -> str:
 
     if any(word in q for word in ["hi", "hello", "aslema", "slm", "salem", "bonjour"]):
         return "greeting"
-    if any(word in q for word in [
-       "produit", "products", "product", "yelzmni", "يلزمني",
-       "nheb produit", "شنو يلزمني", "شنوة يلزمني",
-       "behi", "best", "ahsen", "haja", "solution"
-    ]):
-       return "product_recommendation"
+
     
     if any(word in q for word in [
         "livraison", "delivery", "shipping", "frais livraison",
@@ -675,11 +1307,108 @@ def detect_intent(question: str) -> str:
     ]):
 
         return "price_offer_query"
-    if any(word in q for word in ["naqs", "wazn", "ynaqsou", "lose weight", "perdre du poids", "وزن"]):
+    # FIX: l'intent ingredients/benefits/usage est desormais detecte
+    # independamment de la resolution exacte du produit (avant, ces 3
+    # branches exigeaient `product` non-nul -- une question du type
+    # "ingredients du produit minceur" (terme generique, pas un nom
+    # exact) faisait echouer detect_product, donc la question tombait
+    # dans product_recommendation au lieu de product_ingredients, meme
+    # si le mot "ingredients" etait bien present). La reponse en aval
+    # doit gerer le cas ou product est None en demandant une precision
+    # ("lequel de nos produits ?") plutot que de repondre dans le vide.
+    if any(word in q for word in [
+        "ingredient",
+        "ingredients",
+        "ingredients",
+        "mokawnet",
+        "ingrédients",
+        "composition",
+        "composants",
+        "تركيبة",
+        "مكونات",
+        "شنوة فيه",
+        "chneya fih",
+        "chnowa fih",
+    ]):
+        return "product_ingredients"
+
+    if any(word in q for word in ["faida", "faidet", "fayda", "benefit", "benefits", "bienfait", "bienfaits", "فوائد", "ya3mel"]):
+        return "product_benefits"
+
+    if any(word in q for word in ["kifeh", "comment utiliser", "how should i use", "how to use", "كيف أستعمل", "nesta3ml", "usage", "قداش من شهر", "how long"]):
+        return "product_usage"
+
+    if product:
+        return "product_info"
+    
+    product_request_words = [
+        "produit",
+        "products",
+        "product",
+        "yelzmni",
+        "يلزمني",
+        "nheb produit",
+        "شنو يلزمني",
+        "شنوة يلزمني",
+        "شنوة المنتج",
+        "شنو المنتج",
+        "أي منتج",
+        "behi",
+        "best",
+        "ahsen",
+       "solution",
+    ]
+
+    weight_loss_words = [
+        "naqs",
+        "wazn",
+        "ynaqsou",
+        "yna9es",
+        "n9as",
+        "lose weight",
+        "perdre du poids",
+        "perte de poids",
+        "نقص الوزن",
+        "ننقص في الوزن",
+        "إنقاص الوزن",
+        "فقدان الوزن",
+        "تنحيف",
+    ]
+
+    asks_for_product = any(
+        word in q
+        for word in product_request_words
+    )
+
+    mentions_weight_loss = any(
+        word in q
+        for word in weight_loss_words
+    )
+
+    if asks_for_product and mentions_weight_loss:
+        return "product_recommendation"
+
+    if mentions_weight_loss:
         return "weight_loss_advice"
+
+    if asks_for_product:
+         return "product_recommendation"
 
     if any(word in q for word in ["muscle", "prise de masse", "nzid", "wazn", "mass", "عضلات"]):
         return "muscle_gain_advice"
+
+    # FIX: detect_intent n'avait aucun mot-cle sport/exercice -- une
+    # question purement sportive ("quel sport je peux faire ?") tombait
+    # sur "unknown" dans le champ intent renvoye, meme si la reponse
+    # elle-meme etait bonne (car detect_intent_domain, une fonction
+    # separee utilisee seulement pour adapter le ton, detectait bien
+    # "exercise"). Les deux classifieurs sont maintenant coherents.
+    if any(word in q for word in [
+        "exercise", "sport", "training", "workout", "cardio",
+        "walk", "walking", "run", "running", "fitness", "gym", "movement",
+        "رياضة", "تمرين", "تمارين", "مشي", "لياقة",
+    ]):
+        return "exercise"
 
     if any(word in q for word in ["nekil", "eat", "manger", "meal", "repas", "ftor", "ghda", "3cha", "آكل"]):
         return "meal_suggestion"
@@ -697,12 +1426,7 @@ def detect_intent(question: str) -> str:
     ]):
         return "product_recommendation"
 
-    if product:
-        if any(word in q for word in ["faida", "faidet", "fayda", "benefit", "benefits", "bienfait", "bienfaits", "فوائد", "ya3mel"]):
-            return "product_benefits"
-        if any(word in q for word in ["kifeh", "comment utiliser", "how should i use", "how to use", "كيف أستعمل", "nesta3ml", "usage", "قداش من شهر", "how long"]):
-            return "product_usage"
-        return "product_info"
+
     
     
 
@@ -717,8 +1441,13 @@ def build_intent_instruction(intent: str) -> str:
         "greeting": "Reply briefly and warmly.",
         "weight_loss_advice": "Give practical weight-loss advice with 2 to 4 concrete suggestions.",
         "muscle_gain_advice": "Give practical muscle-gain advice with food and habit suggestions.",
+        "exercise": "Suggest 2 to 4 concrete exercise or activity ideas adapted to the user's profile, age, and goal.",
         "meal_suggestion": "Suggest meal ideas adapted to the user's goal.",
         "calorie_question": "Answer simply about calories. If exact value is unknown, say it is an estimate.",
+        "product_ingredients": (
+            "List the product ingredients using only the product database. "
+            "Do not invent missing quantities."
+        ),
         "product_info": "Explain clearly what the product is, based only on the provided product information.",
         "product_benefits": "Explain product benefits based only on the provided product information.",
         "product_usage": "Explain briefly how to use the product in 1 to 2 sentences.",
@@ -784,38 +1513,239 @@ def is_short_followup(question: str) -> bool:
         "more", "akther", "زيد", "عادي", "donc", "alors"
     }
     return q in short_followups
+def apply_weight_and_glycemic_priority(
+    ranked_products: list[dict],
+    signals: dict,
+    merged_profile: dict,
+    bmi: float | None,
+) -> list[dict]:
+    if not ranked_products:
+        return ranked_products
 
-def recommend_shifa_product(question: str, merged_profile: dict | None = None) -> tuple[str | None, str | None]:
-    q = question.lower()
-    goals = merged_profile.get("goals", []) if merged_profile else []
-    goals_text = " ".join(goals).lower() if isinstance(goals, list) else str(goals).lower()
+    health = {
+        str(item).lower().strip()
+        for item in (
+            signals.get("health_interests")
+            or []
+        )
+    }
 
-    # digestion / constipation / belly / bloating
-    if any(w in q for w in [
-        "constipation", "digest", "digestion", "colon", "bloating",
-        "kerch", "belly", "stomach", "نفخة", "إمساك", "هضم", "كرش", "بطن"
-    ]):
-        return "Colon Detox", "هذا المنتج هو الأقرب لدعم الهضم، الانتفاخ، والإمساك."
+    recommended_signals = {
+        str(item).lower().strip()
+        for item in (
+            signals.get(
+                "recommended_product_signals"
+            )
+            or []
+        )
+    }
 
-    # liver / detox
-    if any(w in q for w in [
-        "liver", "detox", "kebda", "كبد", "تنقية", "سموم"
-    ]):
-        return "Liver Detox", "هذا المنتج هو الأقرب لدعم الكبد والتنقية."
-    if any(w in q for w in [
-        "متقلق", "قلق", "stress", "stressed", "anxiety",
-        "مانجمش نرقد", "ما نرقدش", "نوم", "sleep", "insomnia"
-    ]):
-        return "Blood Detox", "هذا المنتج هو الأقرب لدعم التوازن، الدورة الدموية، والتعب المرتبط بالضغط اليومي."
-    # weight loss / slimming
-    if any(w in q for w in [
-        "naqs", "wazn", "lose weight", "perdre du poids", "slim", "وزن", "تنحيف", "semna", "kerch", "nodh3ef", "سمنة", "graisse",
-        "تخسيس", "نقص وزن", "نضعف", "كرش"
-    ]) or "weight loss" in goals_text:
-        return "Slim Pack", "هذا المنتج هو الأقرب لدعم نقص الوزن."
+    goals = merged_profile.get("goals") or []
 
-    return None, None
+    if not isinstance(goals, list):
+        goals = [goals]
 
+    goals = {
+        str(item).lower().strip()
+        for item in goals
+        if item
+    }
+
+    all_signals = (
+        health
+        | recommended_signals
+        | goals
+    )
+
+    glycemic_signals = {
+        "glycemic_balance",
+        "insulin_sensitivity",
+        "sugar_cravings",
+        "blood sugar",
+        "glucose",
+        "insulin",
+        "diabetes",
+    }
+
+    weight_signals = {
+        "weight_loss",
+        "weight loss",
+        "weight_management",
+        "weight management",
+        "slimming",
+    }
+
+    has_glycemic_need = bool(
+        all_signals & glycemic_signals
+    )
+
+    has_weight_goal = (
+        bool(all_signals & weight_signals)
+        or (
+            bmi is not None
+            and bmi >= 25
+        )
+    )
+
+    if has_glycemic_need:
+        preferred_name = (
+            "Berberine & Ceylon Cinnamon"
+        )
+
+    elif has_weight_goal:
+        preferred_name = "Slim Pack"
+
+    else:
+        return ranked_products
+
+    preferred = [
+        item
+        for item in ranked_products
+        if item.get("name") == preferred_name
+    ]
+
+    remaining = [
+        item
+        for item in ranked_products
+        if item.get("name") != preferred_name
+    ]
+
+    return preferred + remaining
+def recommend_shifa_products(
+    question: str,
+    merged_profile: dict | None = None,
+    limit: int = 3,
+) -> list[dict]:
+    product_db = get_product_knowledge_dict()
+
+
+
+
+    pseudo_signals = {
+        "health_interests": [],
+        "food_patterns": [],
+        "recommended_product_signals": [],
+        "detected_priority_need": None,
+    }
+
+    q = normalize_text(question)
+
+    keyword_signal_map = {
+        "respiratory_support": [
+            "lung",
+            "lungs",
+            "breathing",
+            "respiration",
+            "poumon",
+            "smoking",
+            "tabac",
+            "رئة",
+            "تنفس",
+            "تدخين",
+        ],
+
+        "glycemic_balance": [
+            "blood sugar",
+            "glucose",
+            "glycémie",
+            "insulin",
+            "سكر الدم",
+            "أنسولين",
+        ],
+
+        "constipation": [
+            "constipation",
+            "إمساك",
+        ],
+
+        "fiber_support": [
+            "fiber",
+            "fibre",
+            "psyllium",
+            "ألياف",
+            "سيليوم",
+        ],
+
+        "bloating_gas": [
+            "bloating",
+            "gas",
+            "gaz",
+            "نفخة",
+            "غازات",
+        ],
+
+        "detox": [
+            "liver",
+            "detox",
+            "كبد",
+            "سموم",
+        ],
+
+        "weight_loss": [
+            "weight loss",
+            "slimming",
+            "perdre du poids",
+            "نقص وزن",
+            "تنحيف",
+            "perte de poids",
+            "maigrir",
+            "نقص الوزن",
+            "إنقاص الوزن",
+            "فقدان الوزن",
+            "ننقص في الوزن",
+            "ننقص وزن",
+            "نحب ننقص",
+            "نحب نضعف",
+            "تنحيف",
+        ],
+
+        "heart_support": [
+            "heart",
+            "circulation",
+            "قلب",
+            "دورة دموية",
+        ],
+    }
+
+    for signal, keywords in keyword_signal_map.items():
+        if any(keyword in q for keyword in keywords):
+            pseudo_signals["health_interests"].append(
+                signal
+            )
+
+    profile = merged_profile or {}
+
+    bmi = None
+
+    try:
+        weight = profile.get("weight")
+        height = profile.get("height")
+
+        if weight and height:
+            bmi = weight / ((height / 100) ** 2)
+    except (TypeError, ZeroDivisionError):
+        bmi = None
+
+    ranked = score_products(
+        product_db=product_db,
+        signals=pseudo_signals,
+        merged_profile=profile,
+        bmi=bmi,
+    )
+
+    ranked = apply_digestive_product_priority(
+        ranked,
+        pseudo_signals,
+    )
+
+    ranked = apply_weight_and_glycemic_priority(
+        ranked_products=ranked,
+        signals=pseudo_signals,
+        merged_profile=profile,
+        bmi=bmi,
+    )
+
+    return ranked[:limit]
 
 def is_out_of_scope(question: str, chat_history: list | None = None) -> bool:
     q = question.lower().strip()
@@ -830,6 +1760,9 @@ def is_out_of_scope(question: str, chat_history: list | None = None) -> bool:
         return False
 
     intent = detect_intent(question)
+ 
+
+    user_language = detect_fallback_language(question)
     domain = detect_intent_domain(question)
 
     if intent in [
@@ -951,10 +1884,12 @@ def get_best_quantity_offer(product_name: str | None, quantity_offers_db: dict) 
     )
 
 def format_product_context(product_name: str | None, product_db: dict) -> str:
-    if not product_name or product_name not in product_db:
+    product = get_product_safely(product_db, product_name)
+
+    if not product:
         return ""
 
-    p = product_db[product_name]
+    p = product
 
     benefits = "\n".join([f"- {b}" for b in p.get("benefits", [])])
     ingredients = "\n".join([f"- {i}" for i in p.get("ingredients", [])])
@@ -997,8 +1932,329 @@ def format_chat_history(chat_history: list | None) -> str:
         formatted.append(f"{role}: {content}")
 
     return "\n".join(formatted)
+def get_product_safely(product_db: dict, product_name: str | None):
+    if not product_name:
+        return None
+
+    normalized_name = product_name.strip().lower()
+
+    for key, product in product_db.items():
+        if str(key).strip().lower() == normalized_name:
+            return product
+
+        db_name = str(product.get("name", "")).strip().lower()
+        if db_name == normalized_name:
+            return product
+
+    return None
 
 
+def detect_fallback_language(
+    text: str,
+) -> str:
+    text = normalize_text(text)
+
+    # Arabic letters
+    if any(
+        "\u0600" <= char <= "\u06FF"
+        for char in text
+    ):
+        return "ar"
+
+    # Tunisian dialect written with Latin letters
+    tunisian_markers = [
+        "chnowa",
+        "chneya",
+        "chnouwa",
+        "kifeh",
+        "mta3",
+        "mta",
+        "nheb",
+        "aandkom",
+        "3andkom",
+        "bqadeh",
+        "bgideh",
+        "yelzmni",
+        "lel",
+        "wazn",
+        "na9es",
+        "n9as",
+        "behi",
+        "faida",
+        "faidet",
+        "ya3mel",
+        "nesta3mel",
+        "nestaaml",
+    ]
+
+    if any(
+        marker in text
+        for marker in tunisian_markers
+    ):
+        return "ar"
+
+    # French
+    french_markers = [
+        "produit",
+        "produits",
+        "bienfait",
+        "bienfaits",
+        "prix",
+        "comment",
+        "utiliser",
+        "livraison",
+        "minceur",
+        "poumons",
+        "pour",
+        "avec",
+        "quel",
+        "quelle",
+    ]
+
+    if any(
+        marker in text
+        for marker in french_markers
+    ):
+        return "fr"
+
+    return "en"
+
+def find_matching_bundles(
+    product_names: list[str],
+    bundle_offers_db: list[dict],
+) -> list[dict]:
+    requested = {
+        normalize_text(name)
+        for name in product_names
+        if name
+    }
+
+    if len(requested) < 2:
+        return []
+
+    matches = []
+
+    for bundle in bundle_offers_db:
+        bundle_products = {
+            normalize_text(name)
+            for name in (
+                bundle.get("products")
+                or []
+            )
+            if name
+        }
+
+        # The bundle must include all products requested by the user
+        if requested.issubset(bundle_products):
+            matches.append(bundle)
+
+    return matches
+def build_multi_product_price_answer(
+    product_names: list[str],
+    product_db: dict,
+    bundle_offers_db: list[dict],
+    language: str,
+) -> tuple[str, list[dict], list[dict]]:
+    price_items = []
+
+    for product_name in product_names:
+        product = get_product_safely(
+            product_db,
+            product_name,
+        )
+
+        if not product:
+            continue
+
+        price_items.append({
+            "product": product_name,
+            "price": product.get("price"),
+            "old_price": product.get("old_price"),
+            "currency": (
+                product.get("currency")
+                or "TND"
+            ),
+        })
+
+    bundles = find_matching_bundles(
+        product_names,
+        bundle_offers_db,
+    )
+
+    language = (
+        language or "ar"
+    ).lower()
+
+    lines = []
+
+    if language.startswith("fr"):
+        for item in price_items:
+            name = item["product"]
+            price = item["price"]
+            old_price = item["old_price"]
+            currency = item["currency"]
+
+            if price is None:
+                lines.append(
+                    f"• Le prix de {name} n’est pas disponible actuellement."
+                )
+            elif old_price and old_price > price:
+                lines.append(
+                    f"• {name} : {price:g} {currency} "
+                    f"au lieu de {old_price:g} {currency}."
+                )
+            else:
+                lines.append(
+                    f"• {name} : {price:g} {currency}."
+                )
+
+        if bundles:
+            lines.append(
+                "\nCes produits sont aussi disponibles ensemble dans une offre :"
+            )
+
+            for bundle in bundles:
+                title = (
+                    bundle.get("title")
+                    or bundle.get("name")
+                    or "Pack"
+                )
+                price = (
+                    bundle.get("new_price")
+                    or bundle.get("price")
+                )
+                old_price = bundle.get("old_price")
+                currency = (
+                    bundle.get("currency")
+                    or "TND"
+                )
+
+                if price is None:
+                    lines.append(
+                        f"• {title} : prix non disponible."
+                    )
+                elif old_price and old_price > price:
+                    lines.append(
+                        f"• {title} : {price:g} {currency} "
+                        f"au lieu de {old_price:g} {currency}."
+                    )
+                else:
+                    lines.append(
+                        f"• {title} : {price:g} {currency}."
+                    )
+
+    elif language.startswith("en"):
+        for item in price_items:
+            name = item["product"]
+            price = item["price"]
+            old_price = item["old_price"]
+            currency = item["currency"]
+
+            if price is None:
+                lines.append(
+                    f"• The price of {name} is currently unavailable."
+                )
+            elif old_price and old_price > price:
+                lines.append(
+                    f"• {name}: {price:g} {currency} "
+                    f"instead of {old_price:g} {currency}."
+                )
+            else:
+                lines.append(
+                    f"• {name}: {price:g} {currency}."
+                )
+
+        if bundles:
+            lines.append(
+                "\nThese products are also available together in a bundle:"
+            )
+
+            for bundle in bundles:
+                title = (
+                    bundle.get("title")
+                    or bundle.get("name")
+                    or "Bundle"
+                )
+                price = (
+                    bundle.get("new_price")
+                    or bundle.get("price")
+                )
+                old_price = bundle.get("old_price")
+                currency = (
+                    bundle.get("currency")
+                    or "TND"
+                )
+
+                if price is None:
+                    lines.append(
+                        f"• {title}: price unavailable."
+                    )
+                elif old_price and old_price > price:
+                    lines.append(
+                        f"• {title}: {price:g} {currency} "
+                        f"instead of {old_price:g} {currency}."
+                    )
+                else:
+                    lines.append(
+                        f"• {title}: {price:g} {currency}."
+                    )
+
+    else:
+        for item in price_items:
+            name = item["product"]
+            price = item["price"]
+            old_price = item["old_price"]
+
+            if price is None:
+                lines.append(
+                    f"• سعر {name} موش متوفر حالياً."
+                )
+            elif old_price and old_price > price:
+                lines.append(
+                    f"• {name}: {price:g} دينار "
+                    f"عوض {old_price:g} دينار."
+                )
+            else:
+                lines.append(
+                    f"• {name}: {price:g} دينار."
+                )
+
+        if bundles:
+            lines.append(
+                "\nالمنتجات هاذم موجودين زادة مع بعضهم في عرض:"
+            )
+
+            for bundle in bundles:
+                title = (
+                    bundle.get("title")
+                    or bundle.get("name")
+                    or "باك"
+                )
+                price = (
+                    bundle.get("new_price")
+                    or bundle.get("price")
+                )
+                old_price = bundle.get("old_price")
+
+                if price is None:
+                    lines.append(
+                        f"• {title}: السعر موش متوفر."
+                    )
+                elif old_price and old_price > price:
+                    lines.append(
+                        f"• {title}: {price:g} دينار "
+                        f"عوض {old_price:g} دينار."
+                    )
+                else:
+                    lines.append(
+                        f"• {title}: {price:g} دينار."
+                    )
+
+    return (
+        "\n".join(lines),
+        price_items,
+        bundles,
+    )
 
 def chatbot_response(question, user_profile=None, chat_history=None):
     chat_history = chat_history or []
@@ -1009,6 +2265,12 @@ def chatbot_response(question, user_profile=None, chat_history=None):
     product_db = get_product_knowledge_dict()
     quantity_offers_db = get_quantity_offers_dict()
     bundle_offers_db = get_bundle_offers()
+    product_db = get_product_knowledge_dict()
+   
+  
+    # FIX: merged_profile doit être construit AVANT d'être utilisé par
+    # recommend_shifa_products ci-dessous (il était référencé avant sa
+    # définition, ce qui provoquait un UnboundLocalError à chaque appel).
     merged_profile = {
         "user_id": user_id,
         "age": user_profile.get("age") or stored_profile.get("age"),
@@ -1026,7 +2288,38 @@ def chatbot_response(question, user_profile=None, chat_history=None):
         "last_activity_summary": stored_memory.get("last_activity_summary"),
         "last_detected_issue": stored_memory.get("last_detected_issue"),
         "consistency_score": stored_memory.get("consistency_score"),
+        "language": (
+            user_profile.get("language")
+            or stored_profile.get("language")
+            or detect_fallback_language(question)
+        ),
     }
+
+    ranked_products = recommend_shifa_products(
+        question,
+        merged_profile,
+    )
+
+    reason = None
+    loyalty_recommendation = None
+    if ranked_products:
+        best = ranked_products[0]
+        recommended_product = best["name"]
+
+        reason = build_product_reason(
+            product_name=best["name"],
+            product=best["product"],
+            matched_signals=best["matched_signals"],
+            language="ar",
+        )
+    
+
+    user_language = (
+        user_profile.get("language")
+        or stored_profile.get("language")
+        or detect_fallback_language(question)
+    )
+
 
     if is_out_of_scope(question, chat_history):
         answer = build_out_of_scope_answer(question)
@@ -1055,6 +2348,7 @@ def chatbot_response(question, user_profile=None, chat_history=None):
             "offer_info": None
         }
     intent = detect_intent(question)
+    user_language = detect_fallback_language(question)
     last_intent = get_last_intent_from_history(chat_history)
 
     if intent == "product_info" and last_intent == "delivery_info":
@@ -1069,41 +2363,102 @@ def chatbot_response(question, user_profile=None, chat_history=None):
     - if the goal is muscle gain, suggest enough protein and balanced carbs
     Do not answer in a generic way if profile information exists.
     """  
-    detected_product = detect_product(question)
-    last_product = get_last_product_from_history(chat_history)
-    detected_products = detect_products(question)
+    
+    category_matches = []
 
-    if intent == "delivery_info" and detected_products:
-        delivery_info = format_delivery_info_for_products(
-            detected_products,
-            quantity_offers_db,
-            bundle_offers_db
+    detected_products = detect_products(
+        question,
+        product_db,
+    )
+
+    category_products, ambiguous_groups = (
+        resolve_products_by_category(
+            question,
+            product_db,
+        )
+    )
+
+# Add clear category-based products even when another
+# exact product was already detected.
+    detected_products = list(
+        dict.fromkeys(
+            detected_products
+            + category_products
+        )
+    )
+
+    category_matches = []
+
+# Ask for clarification only when there is a genuinely
+# ambiguous expression such as "detox".
+    if ambiguous_groups:
+        category_matches = list(
+            dict.fromkeys(
+                product_name
+                for group in ambiguous_groups
+                for product_name in group
+            )
         )
 
-        answer = f"أكيد، هاني نعطيك معلومات التوصيل حسب المنتج والكمية:\n{delivery_info}"
+# Fuzzy matching only when nothing was detected.
+    if (
+        not detected_products
+        and not category_matches
+    ):
+        fuzzy_matches = (
+            fuzzy_match_products_by_category(
+                question,
+                product_db,
+            )
+        )
+
+        if len(fuzzy_matches) == 1:
+            detected_products = fuzzy_matches
+
+        elif len(fuzzy_matches) > 1:
+            category_matches = fuzzy_matches
+
+    detected_product = (
+        detected_products[0]
+        if len(detected_products) == 1
+        else None
+    )
+
+# 3. Single resolved product
+    
+
+    print("========== PRODUCT DEBUG ==========")
+    print("QUESTION:", question)
+    print("INTENT:", intent)
+    print("DETECTED PRODUCTS:", detected_products)
+    print("CATEGORY PRODUCTS:", category_products)
+    print("AMBIGUOUS GROUPS:", ambiguous_groups)
+    print("CATEGORY MATCHES:", category_matches)
+    print("===================================")
+
+    
+   
+    if (
+        len(category_matches) > 1
+        and not detected_products
+        and intent in [
+            "price_offer_query",
+            "product_ingredients",
+            "product_benefits",
+            "product_usage",
+            "product_info",
+            "delivery_info",
+        ]
+    ):
+        answer = build_disambiguation_answer(
+            question,
+            category_matches,
+        )
 
         return {
             "answer": answer,
-            "intent": "delivery_info",
-            "detected_product": ", ".join(detected_products),
-            "recommended_product": None,
-            "recommendation_reason": None,
-            "meal_suggestion": None,
-            "calorie_info": None,
-            "usage_info": None,
-            "benefits_info": None,
-            "precautions": None,
-            "lifestyle_suggestion": None,
-            "follow_up_question": None,
-            "price_info": None,
-            "offer_info": delivery_info,
-        }
-    if intent == "delivery_info" and not detected_product:
-        answer = "على أنهي منتج تحب تعرف التوصيل؟ 🚚\nالتوصيل يختلف حسب الكمية، وفي بعض العروض يكون مجاني 😉"
-
-        return {
-            "answer": answer,
-            "intent": "delivery_info",
+            "response": answer,
+            "intent": intent,
             "detected_product": None,
             "recommended_product": None,
             "recommendation_reason": None,
@@ -1113,14 +2468,730 @@ def chatbot_response(question, user_profile=None, chat_history=None):
             "benefits_info": None,
             "precautions": None,
             "lifestyle_suggestion": None,
-            "follow_up_question": answer,
+            "loyalty_recommendation": None,
+            "follow_up_question": None,
+            "price_info": None,
+            "offer_info": None,
+        }        
+
+    last_product = get_last_product_from_history(chat_history)
+
+    if not detected_product and intent == "price_offer_query":
+        detected_product = last_product
+
+    elif not detected_product and is_implicit_reference(question):
+        detected_product = last_product
+
+  
+
+        log_chat_interaction(
+            user_id,
+            {
+                "question": question,
+                "answer": answer,
+                "intent": "price_offer_query",
+                "detected_product": ", ".join(
+                    detected_products
+                ),
+                "recommended_product": None,
+                "used_memory": False,
+            },
+        )
+
+        return {
+            "answer": answer,
+            "intent": "price_offer_query",
+            "detected_product": detected_products,
+            "recommended_product": None,
+            "recommendation_reason": None,
+            "meal_suggestion": None,
+            "calorie_info": None,
+            "usage_info": None,
+            "benefits_info": None,
+            "precautions": None,
+            "lifestyle_suggestion": None,
+            "loyalty_recommendation": None,
+            "follow_up_question": None,
+            "price_info": product_prices,
+            "offer_info": matching_bundles,
+        }
+    
+
+
+
+        log_chat_interaction(
+            user_id,
+            {
+                "question": question,
+                "answer": answer,
+                "intent": "price_offer_query",
+                "detected_product": ", ".join(
+                    detected_products
+                ),
+                "recommended_product": None,
+                "used_memory": False,
+            },
+        )
+
+        return {
+            "answer": answer,
+            "intent": "price_offer_query",
+            "detected_product": detected_products,
+            "recommended_product": None,
+            "recommendation_reason": None,
+            "meal_suggestion": None,
+            "calorie_info": None,
+            "usage_info": None,
+            "benefits_info": None,
+            "precautions": None,
+            "lifestyle_suggestion": None,
+            "loyalty_recommendation": None,
+            "follow_up_question": None,
+            "price_info": price_items,
+            "offer_info": matching_bundles,
+        }
+
+    if intent == "price_offer_query" and detected_product:
+        product = get_product_safely(product_db, detected_product)
+
+        if not product:
+            answer = f"ما لقيتش السعر الحالي متاع {detected_product}."
+            price = None
+        else:
+            price = product.get("price")
+            old_price = product.get("old_price")
+
+            if price is None:
+                answer = f"السعر الحالي متاع {detected_product} موش متوفر."
+            elif old_price and old_price > price:
+                answer = (
+                    f"سعر {detected_product} هو {price:g} دينار "
+                    f"عوض {old_price:g} دينار."
+                )
+            else:
+                answer = f"سعر {detected_product} هو {price:g} دينار تونسي."
+
+        log_chat_interaction(user_id, {
+            "question": question,
+            "answer": answer,
+            "intent": "price_offer_query",
+            "detected_product": detected_product,
+            "recommended_product": None,
+            "used_memory": bool(last_product),
+        })
+
+        return {
+            "answer": answer,
+            "intent": "price_offer_query",
+            "detected_product": detected_product,
+            "recommended_product": None,
+            "recommendation_reason": None,
+            "meal_suggestion": None,
+            "calorie_info": None,
+            "usage_info": None,
+            "benefits_info": None,
+            "precautions": None,
+            "lifestyle_suggestion": None,
+            "follow_up_question": None,
+            "price_info": price,
+            "offer_info": None,
+        } 
+    
+
+# FIX: quand aucun produit exact n'a ete resolu (detected_product est
+# None) mais que la question contient un terme de categorie generique
+# ("produit detox", "produit minceur") qui correspond a PLUSIEURS
+# produits, on demande une precision au lieu de laisser le LLM
+# repondre dans le vide ("prix non specifie") alors que l'info existe
+# bel et bien pour chacun des candidats.
+    if not detected_product and intent in [
+        "price_offer_query",
+        "product_ingredients",
+        "product_benefits",
+        "product_usage",
+        "product_info",
+    ]:
+        
+
+        if len(category_matches) >= 2:
+            answer = build_disambiguation_answer(question, category_matches)
+
+            log_chat_interaction(user_id, {
+                "question": question,
+                "answer": answer,
+                "intent": intent,
+                "detected_product": None,
+                "recommended_product": None,
+                "used_memory": False,
+            })
+
+            return {
+                "answer": answer,
+                "intent": intent,
+                "detected_product": None,
+                "recommended_product": None,
+                "recommendation_reason": None,
+                "meal_suggestion": None,
+                "calorie_info": None,
+                "usage_info": None,
+                "benefits_info": None,
+                "precautions": None,
+                "lifestyle_suggestion": None,
+                "follow_up_question": build_disambiguation_answer(question, category_matches),
+                "price_info": None,
+                "offer_info": None,
+            }
+
+        if len(category_matches) == 1:
+            detected_product = category_matches[0]
+
+            # Le bloc price_offer_query original (plus haut) s'est deja
+            # execute et a ete saute (detected_product etait None a ce
+            # moment-la). On reproduit la meme reponse ici pour ce cas
+            # a un seul candidat, sinon la question resterait sans prix.
+            if intent == "price_offer_query":
+
+                if len(detected_products) >= 2:
+                    (
+                        answer,
+                        product_prices,
+                        matching_bundles,
+                    ) = format_multi_product_prices(
+                        products=detected_products,
+                        product_db=product_db,
+                        bundle_offers_db=bundle_offers_db,
+                        language=user_language,
+                    )
+
+                    log_chat_interaction(
+                        user_id,
+                        {
+                            "question": question,
+                            "answer": answer,
+                            "intent": "price_offer_query",
+                            "detected_product": ", ".join(
+                                detected_products
+                            ),
+                            "recommended_product": None,
+                            "used_memory": False,
+                        },
+                    )
+
+                    return {
+                        "answer": answer,
+                        "response": answer,
+                        "intent": "price_offer_query",
+                        "detected_product": detected_products,
+                        "recommended_product": None,
+                        "recommendation_reason": None,
+                        "meal_suggestion": None,
+                        "calorie_info": None,
+                        "usage_info": None,
+                        "benefits_info": None,
+                        "ingredients_info": None,
+                        "precautions": None,
+                        "lifestyle_suggestion": None,
+                        "follow_up_question": None,
+                        "price_info": product_prices,
+                        "offer_info": matching_bundles,
+                    }
+        
+
+                elif len(detected_products) == 1:
+                    detected_product = detected_products[0]
+
+                    product = get_product_safely(
+                        product_db,
+                        detected_product,
+                    )
+
+                    if not product or product.get("price") is None:
+                        price = None
+                        answer = (
+                            f"السعر الحالي متاع {detected_product} "
+                            f"موش متوفر."
+                        )
+                    else:
+                        price = product.get("price")
+                        old_price = product.get("old_price")
+
+                        if old_price and old_price > price:
+                            answer = (
+                                f"سعر {detected_product} هو "
+                                f"{price:g} دينار عوض "
+                                f"{old_price:g} دينار."
+                            )
+                        else:
+                            answer = (
+                                f"سعر {detected_product} هو "
+                                f"{price:g} دينار تونسي."
+                            )
+
+                    log_chat_interaction(user_id, {
+                        "question": question,
+                        "answer": answer,
+                        "intent": "price_offer_query",
+                        "detected_product": detected_product,
+                        "recommended_product": None,
+                        "used_memory": False,
+                    })
+
+                    return {
+                        "answer": answer,
+                        "intent": "price_offer_query",
+                        "detected_product": detected_product,
+                        "recommended_product": None,
+                        "recommendation_reason": None,
+                        "meal_suggestion": None,
+                        "calorie_info": None,
+                        "usage_info": None,
+                        "benefits_info": None,
+                        "precautions": None,
+                        "lifestyle_suggestion": None,
+                        "follow_up_question": None,
+                        "price_info": price,
+                        "offer_info": None,
+                    }
+                else:
+        # no product detected
+                    answer = build_disambiguation_answer(
+                        question,
+                        category_matches,
+                    )
+
+    if intent == "product_ingredients":
+        products = get_products_context(
+            detected_products,
+            product_db,
+        )
+
+        if not products:
+            if len(category_matches) > 1:
+                answer = build_disambiguation_answer(
+                    question,
+                    category_matches,
+                )
+            else:
+                answer = (
+                    "على أنهي منتج تحب تعرف المكونات؟"
+                )
+
+            return {
+                "answer": answer,
+                "response": answer,
+                "intent": intent,
+                "detected_product": None, 
+                "recommended_product": None,
+                "recommendation_reason": None,
+                "meal_suggestion": None,
+                "calorie_info": None,
+                "usage_info": None,
+                "benefits_info": None,
+                "ingredients_info": None,
+                "precautions": None,
+                "lifestyle_suggestion": None,
+                "follow_up_question": answer,
+                "price_info": None,
+                "offer_info": None,
+            }
+
+        answer, ingredients_info = format_product_field_for_many(
+            products=products,
+            field="ingredients",
+            title="مكونات",
+            language=user_language,
+        )
+
+        product_names = [
+            product.get("name")
+            for product in products
+        ] 
+
+        log_chat_interaction(
+            user_id,
+            {
+                "question": question,
+                "answer": answer,
+                "intent": intent,
+                "detected_product": ", ".join(
+                    product_names
+                ),
+                "recommended_product": None,
+                "used_memory": bool(last_product),
+            },
+        )
+
+        return {
+            "answer": answer,
+            "response": answer,
+            "intent": intent,
+            "detected_product": (
+                product_names[0]
+                if len(product_names) == 1
+                else product_names
+            ),
+            "recommended_product": None,
+            "recommendation_reason": None,
+            "meal_suggestion": None,
+            "calorie_info": None,
+            "usage_info": None,
+            "benefits_info": None,
+            "ingredients_info": ingredients_info,
+            "precautions": None,
+            "lifestyle_suggestion": None,
+            "follow_up_question": None,
             "price_info": None,
             "offer_info": None,
         }
 
-    if not detected_product and is_implicit_reference(question):
-        detected_product = last_product
+    if intent == "product_benefits":
+        products = get_products_context(
+            detected_products,
+            product_db,
+        )
 
+        if not products:
+            answer = (
+                build_disambiguation_answer(
+                    question,
+                    category_matches,
+                )
+                if len(category_matches) > 1
+                else "على أنهي منتج تحب تعرف الفوائد؟"
+            )
+            log_chat_interaction(
+                user_id,
+                {
+                    "question": question,
+                    "answer": answer,
+                    "intent": intent,
+                    "detected_product": None,
+                    "recommended_product": None,
+                    "used_memory": bool(last_product),
+                },
+            )
+
+            return {
+                "answer": answer,
+                "response": answer,
+                "intent": intent,
+                "detected_product": None,
+                "recommended_product": None,
+                "recommendation_reason": None,
+                "meal_suggestion": None,
+                "calorie_info": None,
+                "usage_info": None,
+                "benefits_info": None,
+                "ingredients_info": None,
+                "precautions": None,
+                "lifestyle_suggestion": None,
+                "follow_up_question": answer,
+                "price_info": None,
+                "offer_info": None,
+            }
+
+        user_language = detect_fallback_language(
+            question
+        )
+
+        titles = {
+            "ar": "فوائد",
+            "fr": "Bienfaits de",
+            "en": "Benefits of",
+        }
+
+        answer, benefits_info = (
+            format_product_field_for_many(
+                products=products,
+                field="benefits",
+                title=titles.get(
+                    user_language,
+                    "Benefits of",
+                ),
+                language=user_language,
+            )
+        )
+
+
+        print("========== BENEFITS DEBUG ==========")
+        print("PRODUCTS CONTEXT:", products)
+        print("GENERATED ANSWER:", answer)
+        print("BENEFITS INFO:", benefits_info)
+        print("====================================")
+
+        product_names = [
+            product.get("name")
+            for product in products
+        ]
+
+        print("FINAL ANSWER RETURNED:", answer)
+
+        return {
+            "answer": answer,
+            "response": answer,
+            "intent": intent,
+            "detected_product": (
+                product_names[0]
+                if len(product_names) == 1
+                else product_names
+            ),
+            "recommended_product": None,
+            "recommendation_reason": None,
+            "meal_suggestion": None,
+            "calorie_info": None,
+            "usage_info": None,
+            "benefits_info": benefits_info,
+            "ingredients_info": None,
+            "precautions": None,
+            "lifestyle_suggestion": None,
+            "follow_up_question": None,
+            "price_info": None,
+            "offer_info": None,
+        }
+
+    if intent == "product_usage":
+        products = get_products_context(
+            detected_products,
+            product_db,
+        )
+
+        if not products:
+            answer = (
+                build_disambiguation_answer(
+                    question,
+                    category_matches,
+                )
+                if len(category_matches) > 1
+                else "على أنهي منتج تحب تعرف طريقة الاستعمال؟"
+            )
+            log_chat_interaction(
+                user_id,
+                {
+                    "question": question,
+                    "answer": answer,
+                    "intent": intent,
+                    "detected_product": None,
+                    "recommended_product": None,
+                    "used_memory": bool(last_product),
+                },
+            )
+
+            return {
+                "answer": answer,
+                "response": answer,
+                "intent": intent,
+                "detected_product": None,
+                "recommended_product": None,
+                "recommendation_reason": None,
+                "meal_suggestion": None,
+                "calorie_info": None,
+                "usage_info": None,
+                "benefits_info": None,
+                "ingredients_info": None,
+                "precautions": None,
+                "lifestyle_suggestion": None,
+                "follow_up_question": answer,
+                "price_info": None,
+                "offer_info": None,
+            }
+
+        answer, usage_info = format_product_field_for_many(
+            products=products,
+            field="usage",
+            title="طريقة استعمال",
+            language=user_language,
+        )
+
+        product_names = [
+            product.get("name")
+            for product in products
+        ]
+
+        return {
+            "answer": answer,
+            "response": answer,
+            "intent": intent,
+            "detected_product": (
+                product_names[0]
+                if len(product_names) == 1
+                else product_names
+            ),
+            "recommended_product": None,
+            "recommendation_reason": None,
+            "meal_suggestion": None,
+            "calorie_info": None,
+            "usage_info": usage_info,
+            "benefits_info": None,
+            "ingredients_info": None,
+            "precautions": None,
+            "lifestyle_suggestion": None,
+            "follow_up_question": None,
+            "price_info": None,
+            "offer_info": None,
+        }
+
+
+
+    if intent == "product_info":
+
+        products = get_products_context(
+            detected_products,
+            product_db,
+        )
+
+        if not products:
+ 
+            answer = (
+                build_disambiguation_answer(
+                    question,
+                    category_matches,
+                )
+                if len(category_matches) > 1
+                else "على أنهي منتج تحب معلومات؟"
+            )
+
+            return {
+                "answer": answer,
+                "response": answer,
+                "intent": intent,
+                "detected_product": None,
+                "recommended_product": None,
+                "recommendation_reason": None,
+                "meal_suggestion": None,
+                "calorie_info": None,
+                "usage_info": None,
+                "benefits_info": None,
+                "ingredients_info": None,
+                "precautions": None,
+                "lifestyle_suggestion": None,
+                "follow_up_question": answer,
+                "price_info": None,
+                "offer_info": None,
+            }
+
+        answer, description_info = format_product_field_for_many(
+            products=products,
+            field="description",
+            title="معلومات",
+            language=user_language, 
+             
+        ) 
+
+        product_names = [
+            p["name"]
+            for p in products
+        ]
+
+        return {
+            "answer": answer,
+            "response": answer,
+            "intent": intent,
+            "detected_product": (
+                product_names[0]
+                if len(product_names) == 1
+                else product_names
+            ),
+            "recommended_product": None,
+            "recommendation_reason": None,
+            "meal_suggestion": None,
+            "calorie_info": None,
+            "usage_info": None,
+            "benefits_info": None,
+            "ingredients_info": None,
+            "precautions": None,
+            "lifestyle_suggestion": None,
+            "follow_up_question": None,
+            "price_info": None,
+            "offer_info": None,
+        }
+    
+
+    if intent == "delivery_info":
+
+        if not detected_products:
+
+            if len(category_matches) > 1:
+                answer = build_disambiguation_answer(
+                    question,
+                    category_matches,
+                )
+            else:
+                answer = (
+                    "على أنهي منتج تحب تعرف معلومات التوصيل؟"
+                )
+
+            return {
+                "answer": answer,
+                "response": answer,
+                "intent": intent,
+                "detected_product": None,
+                "recommended_product": None,
+                "recommendation_reason": None,
+                "meal_suggestion": None,
+                "calorie_info": None,
+                "usage_info": None,
+                "benefits_info": None,
+                "ingredients_info": None,
+                "precautions": None,
+                "lifestyle_suggestion": None,
+                "follow_up_question": answer,
+                "price_info": None,
+                "offer_info": None,
+            }
+
+        delivery_info = (
+            format_delivery_info_for_products(
+                detected_products,
+                quantity_offers_db,
+                bundle_offers_db,
+            )
+        )
+
+        answer = (
+            "أكيد، هاني نعطيك معلومات التوصيل "
+            "حسب المنتج والكمية:\n"
+            f"{delivery_info}"
+        )
+
+        log_chat_interaction(
+            user_id,
+            {
+                "question": question,
+                "answer": answer,
+                "intent": intent,
+                "detected_product": ", ".join(
+                    detected_products
+                ),
+                "recommended_product": None,
+                "used_memory": bool(last_product),
+            },
+        )
+
+        return {
+            "answer": answer,
+            "response": answer,
+            "intent": intent,
+            "detected_product": (
+                detected_products[0]
+                if len(detected_products) == 1
+                else detected_products
+            ),
+            "recommended_product": None,
+            "recommendation_reason": None,
+            "meal_suggestion": None,
+            "calorie_info": None,
+            "usage_info": None,
+            "benefits_info": None,
+            "ingredients_info": None,
+            "precautions": None,
+            "lifestyle_suggestion": None,
+            "follow_up_question": None,
+            "price_info": None,
+            "offer_info": delivery_info,
+        }
+
+   
+    
     decision = build_decision_output(
         question=question,
         user_profile=merged_profile,
@@ -1182,7 +3253,7 @@ def chatbot_response(question, user_profile=None, chat_history=None):
     """
     # PROMPT
     messages = [
-        {"role": "system", "content": "Answer in Arabic only."},
+        
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "system", "content": TUNISIAN_EXAMPLES},
         {"role": "system", "content": f"Detected intent: {intent}"},
@@ -1246,13 +3317,43 @@ def chatbot_response(question, user_profile=None, chat_history=None):
         {"role": "user", "content": question}
     ]
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=messages,
-        temperature=0.2
-    )
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            temperature=0.2
+        )
+        answer = response.choices[0].message.content
+    except Exception as exc:
+        print("OpenAI call failed in chatbot_response:", exc)
+        answer = FALLBACK_ANSWERS[detect_fallback_language(question)]
 
-    answer = response.choices[0].message.content
+        log_chat_interaction(user_id, {
+            "question": question,
+            "answer": answer,
+            "intent": "llm_error",
+            "detected_product": decision.get("detected_product"),
+            "recommended_product": decision.get("recommended_product"),
+            "used_memory": bool(stored_memory),
+        })
+
+        return {
+            "answer": answer,
+            "intent": "llm_error",
+            "detected_product": decision.get("detected_product"),
+            "recommended_product": decision.get("recommended_product"),
+            "recommendation_reason": decision.get("recommendation_reason"),
+            "meal_suggestion": decision.get("meal_suggestion"),
+            "calorie_info": decision.get("calorie_info"),
+            "usage_info": decision.get("usage_info"),
+            "benefits_info": decision.get("benefits_info"),
+            "precautions": decision.get("precautions"),
+            "lifestyle_suggestion": decision.get("lifestyle_suggestion"),
+            "follow_up_question": None,
+            "price_info": decision.get("price_info"),
+            "offer_info": decision.get("offer_info"),
+        }
+
     log_chat_interaction(user_id, {
         "question": question,
         "answer": answer,
@@ -1298,6 +3399,27 @@ def chatbot_response(question, user_profile=None, chat_history=None):
         memory_update["notes"] = notes
 
     update_user_memory(user_id, memory_update)
+    
+    final_recommended_product = decision.get(
+        "recommended_product"
+    )
+
+    loyalty_recommendation = None
+
+    if final_recommended_product:
+        user_language = (
+            merged_profile.get("language")
+            or user_profile.get("language")
+            or detect_fallback_language(question)
+        )
+
+        loyalty_recommendation = (
+            build_product_loyalty_message(
+                user_code=user_id,
+                product_name=final_recommended_product,
+                language=user_language,
+            )
+        )
 
     return {
         "answer": answer,
@@ -1311,8 +3433,8 @@ def chatbot_response(question, user_profile=None, chat_history=None):
         "benefits_info": decision["benefits_info"],
         "precautions": decision["precautions"],
         "lifestyle_suggestion": decision["lifestyle_suggestion"],
+        "loyalty_recommendation": loyalty_recommendation,
         "follow_up_question": decision["follow_up_question"],
         "price_info": decision["price_info"],
         "offer_info": decision["offer_info"],
     }
- 
