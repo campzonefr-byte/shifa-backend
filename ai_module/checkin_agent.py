@@ -189,7 +189,8 @@ Rules:
 
     estimated_net_calories = None
     estimated_weekly_weight_change_kg = None
-    weight_trend = ""
+    weight_trend = None
+    prediction_available = False
 
     if estimated_calories_in is not None and estimated_calories_burned is not None:
         estimated_net_calories = estimated_calories_in - estimated_calories_burned

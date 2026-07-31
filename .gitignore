@@ -1,13 +1,24 @@
+# Virtual environment
 venv/
 __pycache__/
 *.pyc
+
+# Environment variables
 .env
-.streamlit/
-evaluation_results.csv
-*.csv
-test_supabase.py
+
+# Test and evaluation files
 evaluate.py
 evaluate_recommendation_agent.py
+
+test_supabase.py
+
+
+# Test data and results
+*.csv
 test_questions.csv
+recommendation_tests.csv
 evaluation_results.csv
-recommendation_test_results.csv
+recommendation_agent_results.csv
+# Local/testing utilities
+app_ui.py
+compute_kpis.py

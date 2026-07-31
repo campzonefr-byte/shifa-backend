@@ -65,11 +65,8 @@ def calculate_weight_goal_progress(
     current_weight = float(current_weight)
     target_weight = float(target_weight)
 
-    total_distance = abs(
-        starting_weight - target_weight
-    )
-
-    if total_distance == 0:
+    # No change is required
+    if starting_weight == target_weight:
         return {
             "starting_weight": starting_weight,
             "current_weight": current_weight,
@@ -79,38 +76,41 @@ def calculate_weight_goal_progress(
             "status": "completed",
         }
 
-    if starting_weight > target_weight:
-        achieved = (
-            starting_weight - current_weight
-        )
+    # Weight-loss objective
+    if target_weight < starting_weight:
+        total_needed = starting_weight - target_weight
+        achieved = starting_weight - current_weight
+
+        progress = (achieved / total_needed) * 100
+        remaining = max(current_weight - target_weight, 0)
+
+        completed = current_weight <= target_weight
+
+    # Weight-gain objective
     else:
-        achieved = (
-            current_weight - starting_weight
-        )
+        total_needed = target_weight - starting_weight
+        achieved = current_weight - starting_weight
+
+        progress = (achieved / total_needed) * 100
+        remaining = max(target_weight - current_weight, 0)
+
+        completed = current_weight >= target_weight
 
     progress = round(
-        (achieved / total_distance) * 100,
+        max(0, min(progress, 100)),
         1,
     )
 
-    progress = max(
-        0,
-        min(progress, 100),
-    )
+    remaining = round(remaining, 1)
 
-    remaining = round(
-        abs(current_weight - target_weight),
-        1,
-    )
-
-    status = "in_progress"
-
-    if progress <= 0:
-        status = "started"
-    elif progress >= 100:
+    if completed:
         status = "completed"
+    elif progress <= 0:
+        status = "started"
     elif progress >= 75:
         status = "almost_there"
+    else:
+        status = "in_progress"
 
     return {
         "starting_weight": starting_weight,
@@ -706,7 +706,7 @@ def build_dashboard(
         or profile.get("weight")
     )
 
-    current_weight = profile.get("weight")
+    current_weight = latest_weight
     target_weight = profile.get("target_weight")
 
     weight_progress = (
@@ -724,9 +724,6 @@ def build_dashboard(
         )
     )
 
-    weight_history = get_weight_history(
-        user_code
-    )
 
     return {
         "weight_goal_progress": (
