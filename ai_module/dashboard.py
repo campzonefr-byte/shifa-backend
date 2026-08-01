@@ -332,7 +332,7 @@ def build_product_loyalty_message(
     product_name: str | None,
     language: str = "ar",
 ) -> dict | None:
-    if not product_name:
+    if not user_code or not product_name:
         return None
 
     products = (
@@ -344,7 +344,7 @@ def build_product_loyalty_message(
     if not product:
         return None
     print("USER CODE =", user_code)
-    loyalty_row = get_loyalty(user_code)
+    loyalty_row = get_loyalty(user_code) or {}
 
     current_points = int(
         loyalty_row.get("points") or 0

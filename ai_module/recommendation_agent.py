@@ -1552,7 +1552,45 @@ def build_exercise_strategy(merged_profile, signals):
             ],
         }
     return strategy
+def build_daily_variation_context() -> dict:
+    today = date.today()
 
+    meal_themes = [
+        "fresh salad and grilled protein",
+        "healthy Tunisian soup and protein",
+        "balanced rice or whole-grain meal",
+        "egg-based meal with vegetables",
+        "legume-based meal",
+        "grilled fish and vegetables",
+        "healthy Tunisian traditional meal",
+    ]
+
+    exercise_themes = [
+        "cardio",
+        "lower body",
+        "upper body and core",
+        "mobility and recovery",
+        "full body",
+        "walking and light strength",
+        "stretching and active recovery",
+    ]
+
+    index = today.toordinal()
+
+    return {
+        "date": str(today),
+        "meal_theme": (
+            meal_themes[
+                index % len(meal_themes)
+            ]
+        ),
+        "exercise_theme": (
+            exercise_themes[
+                index % len(exercise_themes)
+            ]
+        ),
+        "variation_number": index,
+    }
 def generate_dynamic_plan_with_llm(
     merged_profile: dict,
     signals: dict,
@@ -1567,6 +1605,9 @@ def generate_dynamic_plan_with_llm(
         "daily_actions": [],
         "warnings": []
     }
+    daily_variation = (
+        build_daily_variation_context()
+    )
     language = normalize_language(
         merged_profile.get("language", "ar")
     )
@@ -1600,6 +1641,26 @@ def generate_dynamic_plan_with_llm(
     prompt = f"""
 You are a wellness recommendation assistant for Shifa.
 {language_instruction}
+
+
+Today's daily variation context:
+{json.dumps(
+    daily_variation,
+    ensure_ascii=False,
+)}
+
+Daily variation rules:
+- Keep the same health, nutrition and exercise strategy.
+- Change the concrete meal examples according to today's meal theme.
+- Change the concrete workout examples according to today's exercise theme.
+- Do not change medical safety rules.
+- Do not change the main user goal.
+- Do not change product recommendations only for variety.
+- Recommendations generated on the same date should follow the same daily theme.
+- Do not generate exactly the same meal titles on consecutive days unless medically necessary.
+- Do not generate exactly the same exercise session on consecutive days unless medically necessary.
+- Avoid repeating the exact same meal titles and workout title every day.
+
 Generate personalized:
 1. meal recommendations
 2. exercise recommendations
@@ -1668,6 +1729,8 @@ Advanced reasoning rules:
 - If behavior is worsening, give more corrective but supportive recommendations.
 - Do not recommend extreme diets, unrealistic exercises, or medical claims. Prefer realistic habits adapted to the user profile and recent behavior.
 - Use age to adapt exercise intensity and recovery advice.
+- The exercise title and description must accurately match the main workout.
+- If the workout includes strength exercises, do not describe it as only stretching or recovery.
 - Younger users can tolerate more progressive activity suggestions.
 - Older users should receive more gradual and recovery-focused advice.
 - Use food_patterns, activity_level, average steps, mood, consistency, health interests, and today_program to personalize recommendations.
@@ -1877,7 +1940,7 @@ JSON schema:
                     "content": prompt
                 }
             ],
-            temperature=0.5
+            temperature=0.3
         )
 
         content = response.choices[0].message.content.strip()
@@ -2116,7 +2179,10 @@ def build_recommendation_decision(
             bundle_offers_db,
         )
         loyalty_info = build_product_loyalty_message(
-            user_code=merged_profile["user_code"],
+            user_code=(
+                merged_profile.get("user_code")
+                or merged_profile.get("user_id")
+            ),
             product_name=product_name,
             language=merged_profile.get("language", "ar"),
         )
